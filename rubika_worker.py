@@ -29,6 +29,7 @@ from task_store import (
     load_runtime_settings,
     load_processing,
     normalize_runtime_settings,
+    normalize_language,
     normalize_upload_filename,
     pop_first_task,
     queue_size,
@@ -36,6 +37,7 @@ from task_store import (
     save_processing,
     safe_filename,
     session_file_candidates,
+    t as tr,
 )
 
 
@@ -109,6 +111,10 @@ def format_destination_label(settings: dict) -> str:
     return str(settings.get("rubika_target_title") or "Saved Messages")
 
 
+def task_language(task: dict) -> str:
+    return normalize_language(task.get("language") or load_runtime_settings().get("language"))
+
+
 def should_keep_extension(filename: str) -> bool:
     return Path(filename).suffix.lower() in UPLOAD_EXTENSIONS
 
@@ -147,13 +153,14 @@ def update_telegram_status(
             attempt_text=attempt_text or task.get("attempt_text"),
             speed_text=task.get("speed_text"),
             eta_text=task.get("eta_text"),
+            language=task_language(task),
         ),
         "parse_mode": "HTML",
     }
 
     task_id = task.get("task_id", "")
     if action and task_id:
-        label = "🔁 Retry" if action == "retry" else "🛑 Cancel"
+        label = tr(task_language(task), "btn_retry" if action == "retry" else "btn_cancel")
         payload["reply_markup"] = {
             "inline_keyboard": [
                 [{"text": label, "callback_data": f"{action}:{task_id}"}]
@@ -498,11 +505,11 @@ def make_upload_progress_callback(task: dict, attempt: int):
         save_processing(task)
         update_telegram_status(
             task,
-            stage="🚀 Uploading",
+            stage=tr(task_language(task), "stage_uploading"),
             upload_status=(
-                "Finalizing the upload in Rubika."
+                tr(task_language(task), "note_upload_finalizing")
                 if raw_percent == 100
-                else "Sending file to Rubika."
+                else tr(task_language(task), "note_uploading")
             ),
             attempt_text=task["attempt_text"],
         )
@@ -538,8 +545,8 @@ def send_with_retry(
         save_processing(task)
         update_telegram_status(
             task,
-            stage="🚀 Starting Upload",
-            upload_status="Connecting to Rubika.",
+            stage=tr(task_language(task), "stage_starting_upload"),
+            upload_status=tr(task_language(task), "note_upload_connecting"),
             attempt_text=task["attempt_text"],
         )
 
@@ -602,7 +609,7 @@ def send_with_retry(
                 extra = " Retrying with a short safe filename." if fallback_name_retry else ""
                 update_telegram_status(
                     task,
-                    stage="⚠️ Retrying",
+                    stage=tr(task_language(task), "stage_retrying"),
                     upload_status=(
                         f"Attempt {attempt} failed ({reason}). Next retry in {delay}s.{extra}"
                     ),
@@ -642,8 +649,12 @@ def process_task(task: dict) -> None:
         ensure_session(settings["rubika_session"])
         update_telegram_status(
             task,
-            stage="📤 Upload Queue",
-            upload_status=f"Preparing the file for upload to {format_destination_label(settings)}.",
+            stage=tr(task_language(task), "stage_upload_queue"),
+            upload_status=tr(
+                task_language(task),
+                "note_upload_prepare",
+                destination=format_destination_label(settings),
+            ),
         )
 
         task["file_name"] = send_name
@@ -662,8 +673,8 @@ def process_task(task: dict) -> None:
         clear_cancelled(task_id)
         update_telegram_status(
             task,
-            stage="🛑 Cancelled",
-            upload_status="Transfer stopped.",
+            stage=tr(task_language(task), "stage_cancelled"),
+            upload_status=tr(task_language(task), "note_cancelled"),
             attempt_text=task.get("attempt_text"),
             action=None,
         )
@@ -682,11 +693,20 @@ def process_task(task: dict) -> None:
     elapsed_text = task_elapsed_text(task)
     update_telegram_status(
         task,
-        stage="✅ Uploaded",
+        stage=tr(task_language(task), "stage_uploaded"),
         upload_status=(
-            f"File uploaded to {format_destination_label(settings)} successfully in {elapsed_text}."
+            tr(
+                task_language(task),
+                "note_uploaded_elapsed",
+                destination=format_destination_label(settings),
+                elapsed=elapsed_text,
+            )
             if elapsed_text
-            else f"File uploaded to {format_destination_label(settings)} successfully."
+            else tr(
+                task_language(task),
+                "note_uploaded",
+                destination=format_destination_label(settings),
+            )
         ),
         attempt_text=task.get("attempt_text"),
         action=None,

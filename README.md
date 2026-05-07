@@ -24,6 +24,7 @@ The name Walrus is inspired by the Black Sails series: Captain Flint's ship, Wal
 ## Features
 
 - Accept Telegram files and direct `http://` or `https://` file links
+- Download single YouTube videos from Telegram links with `yt-dlp`
 - Queue direct file URLs from the Space dashboard without using Telegram
 - Download files inside the Space runtime
 - Queue Rubika uploads so transfers do not overlap
@@ -111,14 +112,19 @@ TELEGRAM_SESSION=walrus
 RUBIKA_SESSION=rubika_session
 RUBIKA_TARGET=me
 RUBIKA_TARGET_TITLE=Saved Messages
+WALRUS_LANGUAGE=fa
 WALRUS_MAX_FILE_BYTES=8589934592
 WALRUS_MIN_FREE_BYTES=536870912
+WALRUS_YOUTUBE_MAX_HEIGHT=720
+WALRUS_YOUTUBE_CONCURRENT_FRAGMENTS=4
 ```
 
 Notes:
 
 - `RUBIKA_TARGET=me` uploads to Rubika Saved Messages.
+- `WALRUS_LANGUAGE=fa` makes the Telegram bot Persian by default. Use `en` for English.
 - `WALRUS_MAX_FILE_BYTES` defaults to 8 GiB.
+- YouTube downloads default to the best available MP4-compatible video up to 720p.
 - Set `WALRUS_MAX_FILE_BYTES=0` to disable the app-level file size limit.
 - Telegram bot file downloads are limited by Telegram to 2 GB per file. For larger direct files, use the Space dashboard URL form instead.
 - `file://` links are disabled by default. Enable them only if you understand the risk:

@@ -49,6 +49,7 @@ from task_store import (
     load_worker_pid,
     ltr_code,
     mark_cancelled,
+    normalize_language,
     normalize_upload_filename,
     pop_telegram_events,
     processing_task_is_active,
@@ -60,7 +61,15 @@ from task_store import (
     safe_filename,
     save_runtime_settings,
     split_name,
+    t as tr,
     write_failed_entries,
+)
+from youtube_downloader import (
+    YouTubeDownloadCancelled,
+    cleanup_youtube_partials,
+    compact_youtube_error,
+    download_youtube,
+    is_youtube_url,
 )
 
 
@@ -226,26 +235,75 @@ URL_PATTERN = re.compile(r"(?P<url>(?:https?|file)://\S+)", re.IGNORECASE)
 DIRECT_DOWNLOAD_MAX_RETRIES = 5
 DIRECT_DOWNLOAD_RETRY_DELAY = 3
 
-MENU_KEYBOARD = ReplyKeyboardMarkup(
-    [
-        [KeyboardButton(BTN_STATUS), KeyboardButton(BTN_TRANSFERS)],
-        [KeyboardButton(BTN_CLEANUP), KeyboardButton(BTN_CANCEL)],
-        [KeyboardButton(BTN_SETTINGS)],
-    ],
-    resize_keyboard=True,
-)
+MENU_ACTION_KEYS = {
+    "status": "btn_status",
+    "transfers": "btn_transfers",
+    "cleanup": "btn_cleanup",
+    "cancel": "btn_cancel",
+    "settings": "btn_settings",
+}
+MENU_ACTION_BY_TEXT = {
+    tr(language, key): action
+    for language in ("fa", "en")
+    for action, key in MENU_ACTION_KEYS.items()
+}
+MENU_BUTTONS = set(MENU_ACTION_BY_TEXT)
 
-BOT_COMMANDS = [
-    BotCommand("start", "Open the main menu"),
-    BotCommand("settings", "View Rubika upload settings"),
-    BotCommand("status", "Show queue and storage status"),
-    BotCommand("transfers", "List active and queued transfers"),
-    BotCommand("set_rubika", "Start Rubika number setup"),
-    BotCommand("retry", "Retry a failed transfer"),
-    BotCommand("retry_all", "Retry all failed transfers"),
-    BotCommand("cleanup", "Clean safe download leftovers"),
-    BotCommand("cancel", "Cancel a transfer"),
-]
+
+def current_language() -> str:
+    return normalize_language(load_runtime_settings().get("language"))
+
+
+def text_for(key: str, language: str | None = None, **kwargs) -> str:
+    return tr(language or current_language(), key, **kwargs)
+
+
+def menu_keyboard(language: str | None = None) -> ReplyKeyboardMarkup:
+    lang = normalize_language(language or current_language())
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton(tr(lang, "btn_status")), KeyboardButton(tr(lang, "btn_transfers"))],
+            [KeyboardButton(tr(lang, "btn_cleanup")), KeyboardButton(tr(lang, "btn_cancel"))],
+            [KeyboardButton(tr(lang, "btn_settings"))],
+        ],
+        resize_keyboard=True,
+    )
+
+
+MENU_KEYBOARD = menu_keyboard()
+
+BOT_COMMAND_LABELS = {
+    "en": {
+        "start": "Open the main menu",
+        "settings": "View Rubika upload settings",
+        "status": "Show queue and storage status",
+        "transfers": "List active and queued transfers",
+        "set_rubika": "Start Rubika number setup",
+        "retry": "Retry a failed transfer",
+        "retry_all": "Retry all failed transfers",
+        "cleanup": "Clean safe download leftovers",
+        "cancel": "Cancel a transfer",
+    },
+    "fa": {
+        "start": "باز کردن منوی اصلی",
+        "settings": "نمایش تنظیمات روبیکا",
+        "status": "نمایش وضعیت صف و حافظه",
+        "transfers": "نمایش انتقال‌های فعال و صف",
+        "set_rubika": "شروع تنظیم شماره روبیکا",
+        "retry": "تلاش دوباره برای انتقال ناموفق",
+        "retry_all": "تلاش دوباره برای همه انتقال‌های ناموفق",
+        "cleanup": "پاک‌سازی فایل‌های امن",
+        "cancel": "لغو یک انتقال",
+    },
+}
+
+
+def bot_commands(language: str | None = None) -> list[BotCommand]:
+    lang = normalize_language(language or current_language())
+    labels = BOT_COMMAND_LABELS[lang]
+    return [BotCommand(command, description) for command, description in labels.items()]
+
+
 MENU_BUTTON_FILTER = filters.create(
     lambda _filter, _client, message: (message.text or "").strip() in MENU_BUTTONS
 )
@@ -253,12 +311,13 @@ MENU_BUTTON_FILTER = filters.create(
 
 async def ensure_bot_commands(client: Client) -> None:
     global COMMANDS_READY
-    if COMMANDS_READY:
+    language = current_language()
+    if COMMANDS_READY == language:
         return
 
     try:
-        await client.set_bot_commands(BOT_COMMANDS)
-        COMMANDS_READY = True
+        await client.set_bot_commands(bot_commands(language))
+        COMMANDS_READY = language
     except Exception:
         pass
 
@@ -302,29 +361,39 @@ async def ensure_authorized_callback(callback_query: CallbackQuery) -> bool:
 
 def build_menu_text() -> str:
     settings = load_settings_with_phone()
+    lang = settings["language"]
+    if lang == "fa":
+        intro = "📤 <b>فایل، لینک مستقیم یا لینک یوتیوب بفرست</b> تا بعد از دانلود در روبیکا آپلود شود."
+        session_label = "نشست روبیکا"
+        destination_label = "مقصد"
+    else:
+        intro = "📤 <b>Send a file, direct link, or YouTube link</b> and I will upload it to Rubika."
+        session_label = "Rubika Session"
+        destination_label = "Destination"
     return "\n".join(
         [
             "<b>⛵️ WalrusHF</b>",
-            "📤 <b>Send a file or direct file link</b> and I will upload it to Rubika.",
+            intro,
             "",
-            f"📱 <b>Rubika Session:</b> {ltr_code(settings['rubika_session'])}",
-            f"📬 <b>Destination:</b> {ltr_code(format_destination_label(settings))}",
+            f"📱 <b>{session_label}:</b> {ltr_code(settings['rubika_session'])}",
+            f"📬 <b>{destination_label}:</b> {ltr_code(format_destination_label(settings))}",
         ]
     )
 
 
 def main_action_keyboard() -> InlineKeyboardMarkup:
+    lang = current_language()
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("📊 Status", callback_data="menu:status"),
-                InlineKeyboardButton("📋 Transfers", callback_data="menu:transfers"),
+                InlineKeyboardButton(tr(lang, "btn_status"), callback_data="menu:status"),
+                InlineKeyboardButton(tr(lang, "btn_transfers"), callback_data="menu:transfers"),
             ],
             [
-                InlineKeyboardButton("🧹 Cleanup", callback_data="menu:cleanup"),
-                InlineKeyboardButton("🛑 Cancel", callback_data="menu:cancel"),
+                InlineKeyboardButton(tr(lang, "btn_cleanup"), callback_data="menu:cleanup"),
+                InlineKeyboardButton(tr(lang, "btn_cancel"), callback_data="menu:cancel"),
             ],
-            [InlineKeyboardButton("⚙️ Settings", callback_data="menu:settings")],
+            [InlineKeyboardButton(tr(lang, "btn_settings"), callback_data="menu:settings")],
         ]
     )
 
@@ -392,10 +461,12 @@ def load_settings_with_phone() -> dict:
 
 
 def settings_action_keyboard() -> InlineKeyboardMarkup:
+    lang = current_language()
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("📱 Change Account", callback_data="settings:session")],
-            [InlineKeyboardButton("📬 Destination", callback_data="settings:destination")],
+            [InlineKeyboardButton(tr(lang, "btn_change_account"), callback_data="settings:session")],
+            [InlineKeyboardButton(tr(lang, "btn_destination"), callback_data="settings:destination")],
+            [InlineKeyboardButton(tr(lang, "btn_language"), callback_data="settings:language")],
         ]
     )
 
@@ -435,7 +506,25 @@ def auth_setup_keyboard() -> InlineKeyboardMarkup:
 
 def build_settings_text(note: str | None = None) -> str:
     settings = load_settings_with_phone()
+    lang = settings["language"]
     active_phone = settings.get("rubika_phone") or "Not set"
+    if lang == "fa":
+        lines = [
+            "<b>⚙️ تنظیمات روبیکا</b>",
+            "",
+            "اینجا حساب، مقصد آپلود و زبان ربات را کنترل می‌کنی.",
+            "",
+            f"📱 <b>حساب فعلی:</b> {ltr_code(settings['rubika_session'])}",
+            f"☎️ <b>شماره فعال:</b> {ltr_code(active_phone)}",
+            f"📬 <b>مقصد آپلود:</b> {ltr_code(format_destination_label(settings))}",
+            f"🌐 <b>زبان:</b> {ltr_code(tr(lang, 'language_name'))}",
+            "",
+            "انتقال‌هایی که قبلا وارد صف شده‌اند مقصد و زبان زمان ثبت خودشان را نگه می‌دارند.",
+        ]
+        if note:
+            lines.extend(["", note])
+        return "\n".join(lines)
+
     lines = [
         "<b>⚙️ Rubika Settings</b>",
         "",
@@ -444,6 +533,7 @@ def build_settings_text(note: str | None = None) -> str:
         f"📱 <b>Current Account:</b> {ltr_code(settings['rubika_session'])}",
         f"☎️ <b>Active Phone:</b> {ltr_code(active_phone)}",
         f"📬 <b>Upload Destination:</b> {ltr_code(format_destination_label(settings))}",
+        f"🌐 <b>Language:</b> {ltr_code(tr(lang, 'language_name'))}",
     ]
 
     lines.extend(
@@ -1274,9 +1364,9 @@ def transfers_action_keyboard() -> InlineKeyboardMarkup:
 
 def status_action_keyboard(task_id: str, action: str = "cancel") -> InlineKeyboardMarkup:
     if action == "retry":
-        button = InlineKeyboardButton("🔁 Retry", callback_data=f"retry:{task_id}")
+        button = InlineKeyboardButton(tr(current_language(), "btn_retry"), callback_data=f"retry:{task_id}")
     else:
-        button = InlineKeyboardButton("🛑 Cancel", callback_data=f"cancel:{task_id}")
+        button = InlineKeyboardButton(tr(current_language(), "btn_cancel"), callback_data=f"cancel:{task_id}")
 
     return InlineKeyboardMarkup([[button]])
 
@@ -1286,7 +1376,7 @@ async def send_cancel_picker(message: Message) -> None:
     if not keyboard:
         await message.reply_text(
             "🛑 There are no active transfers to cancel.",
-            reply_markup=MENU_KEYBOARD,
+            reply_markup=menu_keyboard(),
         )
         return
 
@@ -1776,7 +1866,7 @@ async def cancel_task_by_id(client: Client, message: Message, task_id: str) -> N
             upload_status="Stopping the transfer.",
         )
         await edit_status_by_task(client, active, text)
-        await message.reply_text(f"🛑 Cancel requested: {task_id}", reply_markup=MENU_KEYBOARD)
+        await message.reply_text(f"🛑 Cancel requested: {task_id}", reply_markup=menu_keyboard())
         return
 
     queued_task = remove_queued_task(task_id)
@@ -1792,7 +1882,7 @@ async def cancel_task_by_id(client: Client, message: Message, task_id: str) -> N
             upload_status="Removed from the queue.",
         )
         await edit_status_by_task(client, queued_task, text)
-        await message.reply_text(f"🗑 Removed from queue: {task_id}", reply_markup=MENU_KEYBOARD)
+        await message.reply_text(f"🗑 Removed from queue: {task_id}", reply_markup=menu_keyboard())
         return
 
     processing_task = load_processing()
@@ -1814,14 +1904,14 @@ async def cancel_task_by_id(client: Client, message: Message, task_id: str) -> N
             attempt_text=processing_task.get("attempt_text"),
         )
         await edit_status_by_task(client, processing_task, text)
-        await message.reply_text(f"🛑 Cancel requested: {task_id}", reply_markup=MENU_KEYBOARD)
+        await message.reply_text(f"🛑 Cancel requested: {task_id}", reply_markup=menu_keyboard())
         return
 
     if is_cancelled(task_id):
-        await message.reply_text(f"🛑 Already cancelled: {task_id}", reply_markup=MENU_KEYBOARD)
+        await message.reply_text(f"🛑 Already cancelled: {task_id}", reply_markup=menu_keyboard())
         return
 
-    await message.reply_text(f"🔎 Task not found: {task_id}", reply_markup=MENU_KEYBOARD)
+    await message.reply_text(f"🔎 Task not found: {task_id}", reply_markup=menu_keyboard())
 
 
 def resolve_task_from_reply(status_message_id: int | None) -> tuple[str | None, dict | None]:
@@ -1930,6 +2020,7 @@ def make_download_progress_callback(task_id: str, status_message: Message, task_
             upload_status="The file will enter the upload queue after download.",
             speed_text=speed_text,
             eta_text=eta_text,
+            language=task_meta.get("language"),
         )
         loop.create_task(
             safe_edit_status(
@@ -2010,6 +2101,90 @@ def make_direct_download_progress_callback(task_id: str, status_message: Message
             upload_status="Downloading the file from the link.",
             speed_text=speed_text,
             eta_text=eta_text,
+            language=task_meta.get("language"),
+        )
+        loop.call_soon_threadsafe(
+            lambda: loop.create_task(
+                safe_edit_status(
+                    status_message,
+                    text,
+                    reply_markup=status_action_keyboard(task_id, "cancel"),
+                )
+            )
+        )
+
+    return progress
+
+
+def make_youtube_download_progress_callback(task_id: str, status_message: Message, task_meta: dict):
+    loop = asyncio.get_running_loop()
+    state = {
+        "last_percent": -1,
+        "last_update": 0.0,
+        "last_bytes": 0,
+        "last_sample_at": time.monotonic(),
+        "speed_bps": 0.0,
+    }
+
+    def progress(current: int, total: int) -> None:
+        active = ACTIVE_DOWNLOADS.get(task_id)
+        if active and active.get("cancelled"):
+            raise YouTubeDownloadCancelled("Cancelled by user.")
+
+        if total > 0:
+            task_meta["file_size"] = total
+            if active is not None:
+                active["file_size"] = total
+            percent = min(100, max(0, int((current * 100) / total)))
+        else:
+            percent = 0
+
+        now = time.monotonic()
+        delta_bytes = max(0, current - state["last_bytes"])
+        delta_time = max(0.0, now - state["last_sample_at"])
+        if delta_bytes > 0 and delta_time > 0:
+            instant_speed = delta_bytes / delta_time
+            state["speed_bps"] = (
+                instant_speed
+                if state["speed_bps"] <= 0
+                else (state["speed_bps"] * 0.65) + (instant_speed * 0.35)
+            )
+            state["last_bytes"] = current
+            state["last_sample_at"] = now
+
+        speed_text = human_speed(state["speed_bps"]) if state["speed_bps"] > 0 else None
+        eta_text = None
+        if total > 0:
+            remaining = max(0, total - current)
+            if remaining > 0 and state["speed_bps"] > 0:
+                eta_text = human_duration(remaining / state["speed_bps"])
+
+        should_emit = (
+            percent == 100
+            or state["last_percent"] < 0
+            or percent - state["last_percent"] >= 5
+            or now - state["last_update"] >= 2
+        )
+        if not should_emit:
+            return
+
+        state["last_percent"] = percent
+        state["last_update"] = now
+        if active is not None:
+            active["download_percent"] = percent
+
+        language = task_meta.get("language")
+        text = build_status_text(
+            task_id=task_id,
+            file_name=task_meta["file_name"],
+            file_size=task_meta["file_size"],
+            stage=tr(language, "stage_downloading"),
+            download_percent=percent,
+            upload_percent=0,
+            upload_status=tr(language, "note_downloading_youtube"),
+            speed_text=speed_text,
+            eta_text=eta_text,
+            language=language,
         )
         loop.call_soon_threadsafe(
             lambda: loop.create_task(
@@ -2178,11 +2353,12 @@ async def queue_downloaded_file(
             task_id=task_id,
             file_name=file_name,
             file_size=file_size,
-            stage="⏳ Upload Queue",
+            stage=tr(task["language"], "stage_upload_queue"),
             download_percent=100,
             upload_percent=0,
-            upload_status="Waiting for upload to Rubika.",
+            upload_status=tr(task["language"], "note_waiting_upload"),
             queue_position=queue_position,
+            language=task["language"],
         ),
         reply_markup=status_action_keyboard(task_id, "cancel"),
     )
@@ -2208,7 +2384,7 @@ async def start_handler(client: Client, message: Message):
         try:
             await message.reply_text(
                 "⚠️ /start failed inside the bot. Check the Space logs for the exact error.",
-                reply_markup=MENU_KEYBOARD,
+                reply_markup=menu_keyboard(),
             )
         except Exception as reply_error:
             print(f"/start error reply failed: {reply_error}", flush=True)
@@ -2296,7 +2472,7 @@ async def retry_task_by_id(client: Client, message: Message, task_id: str) -> No
                     "It was probably cleaned up. Please send the file again.",
                 ]
             ),
-            reply_markup=MENU_KEYBOARD,
+            reply_markup=menu_keyboard(),
         )
         return
 
@@ -2327,7 +2503,7 @@ async def retry_task_by_id(client: Client, message: Message, task_id: str) -> No
 
     await message.reply_text(
         f"🔁 Added back to queue: {task_id}",
-        reply_markup=MENU_KEYBOARD,
+        reply_markup=menu_keyboard(),
     )
 
 
@@ -2336,7 +2512,7 @@ async def retry_all_failed_tasks(client: Client, message: Message) -> None:
     if not retryable_tasks:
         await message.reply_text(
             "🔎 No retryable failed transfers were found.",
-            reply_markup=MENU_KEYBOARD,
+            reply_markup=menu_keyboard(),
         )
         return
 
@@ -2399,7 +2575,7 @@ async def retry_all_failed_tasks(client: Client, message: Message) -> None:
     if queued_count == 0:
         await message.reply_text(
             "⚠️ No failed transfers were added back to the queue.",
-            reply_markup=MENU_KEYBOARD,
+            reply_markup=menu_keyboard(),
         )
         return
 
@@ -2414,7 +2590,7 @@ async def retry_all_failed_tasks(client: Client, message: Message) -> None:
     await message.reply_text(
         "\n".join(lines),
         parse_mode=enums.ParseMode.HTML,
-        reply_markup=MENU_KEYBOARD,
+        reply_markup=menu_keyboard(),
     )
 
 
@@ -2449,16 +2625,17 @@ async def menu_button_handler(client: Client, message: Message):
     if not await ensure_authorized_message(message):
         return
     text = (message.text or "").strip()
+    action = MENU_ACTION_BY_TEXT.get(text)
 
-    if text == BTN_STATUS:
+    if action == "status":
         await status_handler(client, message)
-    elif text == BTN_TRANSFERS:
+    elif action == "transfers":
         await transfers_handler(client, message)
-    elif text == BTN_CLEANUP:
+    elif action == "cleanup":
         await cleanup_handler(client, message)
-    elif text == BTN_CANCEL:
+    elif action == "cancel":
         await send_cancel_picker(message)
-    elif text == BTN_SETTINGS:
+    elif action == "settings":
         await settings_handler(client, message)
 
 
@@ -2492,6 +2669,17 @@ async def settings_callback_handler(client: Client, callback_query: CallbackQuer
         await prompt_rubika_phone_setup(callback_query.message)
     elif action == "destination":
         await send_destination_panel(callback_query.message)
+    elif action == "language":
+        settings = load_runtime_settings()
+        settings["language"] = "en" if settings.get("language") == "fa" else "fa"
+        save_runtime_settings(settings)
+        await ensure_bot_commands(client)
+        note = (
+            "✅ Language changed to English."
+            if settings["language"] == "en"
+            else "✅ زبان ربات فارسی شد."
+        )
+        await send_settings_panel(callback_query.message, note=note)
 
 
 @app.on_callback_query(filters.regex(r"^destination:"))
@@ -2705,7 +2893,7 @@ async def media_handler(client: Client, message: Message):
         else:
             ensure_download_space()
     except RuntimeError as error:
-        await message.reply_text(f"⚠️ {error}", reply_markup=MENU_KEYBOARD)
+        await message.reply_text(f"⚠️ {error}", reply_markup=menu_keyboard())
         return
 
     status = await message.reply_text(
@@ -2713,10 +2901,11 @@ async def media_handler(client: Client, message: Message):
             task_id=task_id,
             file_name=file_name,
             file_size=file_size,
-            stage="⏳ Preparing Download",
+            stage=tr(runtime_settings["language"], "stage_preparing_download"),
             download_percent=0,
             upload_percent=0,
-            upload_status="The file will start downloading soon.",
+            upload_status=tr(runtime_settings["language"], "note_file_download_soon"),
+            language=runtime_settings["language"],
         ),
         parse_mode=enums.ParseMode.HTML,
         reply_markup=status_action_keyboard(task_id, "cancel"),
@@ -2733,6 +2922,7 @@ async def media_handler(client: Client, message: Message):
         "cancelled": False,
         "download_percent": 0,
         "upload_percent": 0,
+        "language": runtime_settings["language"],
     }
 
     try:
@@ -2742,7 +2932,11 @@ async def media_handler(client: Client, message: Message):
             progress=make_download_progress_callback(
                 task_id,
                 status,
-                {"file_name": file_name, "file_size": file_size},
+                {
+                    "file_name": file_name,
+                    "file_size": file_size,
+                    "language": runtime_settings["language"],
+                },
             ),
             progress_args=(client,),
         )
@@ -2782,10 +2976,11 @@ async def media_handler(client: Client, message: Message):
                     task_id=task_id,
                     file_name=file_name,
                     file_size=file_size,
-                    stage="🛑 Cancelled",
+                    stage=tr(runtime_settings["language"], "stage_cancelled"),
                     download_percent=active.get("download_percent", 0),
                     upload_percent=active.get("upload_percent", 0),
-                    upload_status="Transfer stopped.",
+                    upload_status=tr(runtime_settings["language"], "note_cancelled"),
+                    language=runtime_settings["language"],
                 ),
             )
         else:
@@ -2795,11 +2990,12 @@ async def media_handler(client: Client, message: Message):
                     task_id=task_id,
                     file_name=file_name,
                     file_size=file_size,
-                    stage="❌ Download Failed",
+                    stage=tr(runtime_settings["language"], "stage_download_failed"),
                     download_percent=active.get("download_percent", 0),
                     upload_percent=active.get("upload_percent", 0),
-                    upload_status="The download did not complete.",
+                    upload_status=tr(runtime_settings["language"], "note_download_failed"),
                     note=str(e),
+                    language=runtime_settings["language"],
                 ),
             )
     finally:
@@ -2816,17 +3012,22 @@ async def process_direct_file_url(message: Message, url: str) -> dict:
     download_path = DOWNLOAD_DIR / file_name
     started_at = time.time()
     runtime_settings = load_runtime_settings()
-    task_meta = {"file_name": file_name, "file_size": 0}
+    task_meta = {
+        "file_name": file_name,
+        "file_size": 0,
+        "language": runtime_settings["language"],
+    }
 
     status = await message.reply_text(
         build_status_text(
             task_id=task_id,
             file_name=file_name,
             file_size=0,
-            stage="⏳ Preparing Download",
+            stage=tr(runtime_settings["language"], "stage_preparing_download"),
             download_percent=0,
             upload_percent=0,
-            upload_status="The file link will start downloading soon.",
+            upload_status=tr(runtime_settings["language"], "note_link_download_soon"),
+            language=runtime_settings["language"],
         ),
         parse_mode=enums.ParseMode.HTML,
         reply_markup=status_action_keyboard(task_id, "cancel"),
@@ -2843,6 +3044,7 @@ async def process_direct_file_url(message: Message, url: str) -> dict:
         "cancelled": False,
         "download_percent": 0,
         "upload_percent": 0,
+        "language": runtime_settings["language"],
     }
 
     try:
@@ -2890,10 +3092,11 @@ async def process_direct_file_url(message: Message, url: str) -> dict:
                     task_id=task_id,
                     file_name=file_name,
                     file_size=task_meta.get("file_size", 0),
-                    stage="🛑 Cancelled",
+                    stage=tr(runtime_settings["language"], "stage_cancelled"),
                     download_percent=active.get("download_percent", 0),
                     upload_percent=0,
-                    upload_status="Transfer stopped.",
+                    upload_status=tr(runtime_settings["language"], "note_cancelled"),
+                    language=runtime_settings["language"],
                 ),
             )
             return {"task_id": task_id, "file_name": file_name, "status": "cancelled"}
@@ -2904,14 +3107,147 @@ async def process_direct_file_url(message: Message, url: str) -> dict:
                     task_id=task_id,
                     file_name=file_name,
                     file_size=task_meta.get("file_size", 0),
-                    stage="❌ Download Failed",
+                    stage=tr(runtime_settings["language"], "stage_download_failed"),
                     download_percent=active.get("download_percent", 0),
                     upload_percent=0,
-                    upload_status="The file link download did not complete.",
+                    upload_status=tr(runtime_settings["language"], "note_download_failed"),
                     note=str(e),
+                    language=runtime_settings["language"],
                 ),
             )
             return {"task_id": task_id, "file_name": file_name, "status": "failed"}
+    finally:
+        ACTIVE_DOWNLOADS.pop(task_id, None)
+
+
+async def process_youtube_url(message: Message, url: str) -> dict:
+    task_id = uuid.uuid4().hex[:10]
+    started_at = time.time()
+    runtime_settings = load_runtime_settings()
+    language = runtime_settings["language"]
+    file_name = f"youtube_{task_id}.mp4"
+    task_meta = {
+        "file_name": file_name,
+        "file_size": 0,
+        "language": language,
+    }
+
+    status = await message.reply_text(
+        build_status_text(
+            task_id=task_id,
+            file_name=file_name,
+            file_size=0,
+            stage=tr(language, "stage_youtube_prepare"),
+            download_percent=0,
+            upload_percent=0,
+            upload_status=tr(language, "note_youtube_download_soon"),
+            language=language,
+        ),
+        parse_mode=enums.ParseMode.HTML,
+        reply_markup=status_action_keyboard(task_id, "cancel"),
+    )
+
+    ACTIVE_DOWNLOADS[task_id] = {
+        "task_id": task_id,
+        "chat_id": message.chat.id,
+        "status_message_id": status.id,
+        "download_path": str(DOWNLOAD_DIR / file_name),
+        "file_name": file_name,
+        "file_size": 0,
+        "started_at": started_at,
+        "cancelled": False,
+        "download_percent": 0,
+        "upload_percent": 0,
+        "language": language,
+    }
+
+    space_checked = {"done": False}
+
+    def check_youtube_size(size: int) -> None:
+        if size > 0:
+            ensure_file_size_allowed(size, "YouTube video")
+            if not space_checked["done"]:
+                ensure_download_space(size)
+                space_checked["done"] = True
+        else:
+            if not space_checked["done"]:
+                ensure_download_space()
+                space_checked["done"] = True
+
+    try:
+        result = await asyncio.to_thread(
+            download_youtube,
+            url=url,
+            output_dir=DOWNLOAD_DIR,
+            task_id=task_id,
+            should_cancel=lambda: ACTIVE_DOWNLOADS.get(task_id, {}).get("cancelled", False),
+            progress=make_youtube_download_progress_callback(task_id, status, task_meta),
+            check_size=check_youtube_size,
+            language=language,
+        )
+
+        if ACTIVE_DOWNLOADS.get(task_id, {}).get("cancelled"):
+            raise YouTubeDownloadCancelled("Cancelled by user.")
+
+        task_meta["file_name"] = result.file_name
+        task_meta["file_size"] = result.file_size
+        ACTIVE_DOWNLOADS[task_id]["download_path"] = str(result.path)
+        ACTIVE_DOWNLOADS[task_id]["file_name"] = result.file_name
+        ACTIVE_DOWNLOADS[task_id]["file_size"] = result.file_size
+
+        await queue_downloaded_file(
+            task_id=task_id,
+            message=message,
+            status=status,
+            file_name=result.file_name,
+            file_size=result.file_size,
+            media_type="video",
+            started_at=started_at,
+            downloaded_path=result.path,
+            caption="",
+            source="youtube",
+            source_url=url,
+            upload_file_name=result.file_name,
+            runtime_settings=runtime_settings,
+        )
+        return {"task_id": task_id, "file_name": result.file_name, "status": "queued"}
+    except Exception as error:
+        active = ACTIVE_DOWNLOADS.get(task_id, {})
+        was_cancelled = active.get("cancelled") or isinstance(error, YouTubeDownloadCancelled)
+        cleanup_youtube_partials(DOWNLOAD_DIR, task_id)
+
+        if was_cancelled:
+            await safe_edit_status(
+                status,
+                build_status_text(
+                    task_id=task_id,
+                    file_name=task_meta["file_name"],
+                    file_size=task_meta.get("file_size", 0),
+                    stage=tr(language, "stage_cancelled"),
+                    download_percent=active.get("download_percent", 0),
+                    upload_percent=0,
+                    upload_status=tr(language, "note_cancelled"),
+                    language=language,
+                ),
+            )
+            return {"task_id": task_id, "file_name": task_meta["file_name"], "status": "cancelled"}
+
+        note = compact_youtube_error(error, language)
+        await safe_edit_status(
+            status,
+            build_status_text(
+                task_id=task_id,
+                file_name=task_meta["file_name"],
+                file_size=task_meta.get("file_size", 0),
+                stage=tr(language, "stage_download_failed"),
+                download_percent=active.get("download_percent", 0),
+                upload_percent=0,
+                upload_status=tr(language, "note_download_failed"),
+                note=note,
+                language=language,
+            ),
+        )
+        return {"task_id": task_id, "file_name": task_meta["file_name"], "status": "failed"}
     finally:
         ACTIVE_DOWNLOADS.pop(task_id, None)
 
@@ -2935,16 +3271,23 @@ async def direct_file_url_handler(_client: Client, message: Message):
     if len(urls) > 1:
         await message.reply_text(
             f"🔗 Found {len(urls)} links. Starting downloads now.",
-            reply_markup=MENU_KEYBOARD,
+            reply_markup=menu_keyboard(),
         )
 
-    results = await asyncio.gather(*(process_direct_file_url(message, url) for url in urls))
+    results = await asyncio.gather(
+        *(
+            process_youtube_url(message, url)
+            if is_youtube_url(url)
+            else process_direct_file_url(message, url)
+            for url in urls
+        )
+    )
 
     if len(urls) > 1:
         await message.reply_text(
             build_batch_summary_text(results),
             parse_mode=enums.ParseMode.HTML,
-            reply_markup=MENU_KEYBOARD,
+            reply_markup=menu_keyboard(),
         )
 
 

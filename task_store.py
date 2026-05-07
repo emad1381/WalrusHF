@@ -39,6 +39,111 @@ PROCESSING_ACTIVE_HEARTBEAT_SECONDS = int(
 )
 LRM = "\u200e"
 FILENAME_MAX_BYTES = 200
+SUPPORTED_LANGUAGES = {"fa", "en"}
+TRANSLATIONS = {
+    "en": {
+        "title": "WalrusHF",
+        "status": "Status",
+        "note": "Note",
+        "file": "File",
+        "size": "Size",
+        "id": "ID",
+        "download": "Download",
+        "upload": "Upload",
+        "attempt": "Attempt",
+        "speed": "Speed",
+        "eta": "ETA",
+        "queue": "Queue",
+        "btn_status": "📊 Status",
+        "btn_transfers": "📋 Transfers",
+        "btn_cleanup": "🧹 Cleanup",
+        "btn_cancel": "🛑 Cancel",
+        "btn_settings": "⚙️ Settings",
+        "btn_retry": "🔁 Retry",
+        "btn_language": "🌐 Language",
+        "btn_change_account": "📱 Change Account",
+        "btn_destination": "📬 Destination",
+        "btn_back": "↩️ Back",
+        "language_name": "English",
+        "stage_preparing_download": "⏳ Preparing Download",
+        "stage_downloading": "⬇️ Downloading",
+        "stage_youtube_prepare": "🎬 Preparing YouTube",
+        "stage_upload_queue": "⏳ Upload Queue",
+        "stage_download_failed": "❌ Download Failed",
+        "stage_cancelled": "🛑 Cancelled",
+        "stage_cancelling": "🛑 Cancelling",
+        "stage_starting_upload": "🚀 Starting Upload",
+        "stage_uploading": "🚀 Uploading",
+        "stage_retrying": "⚠️ Retrying",
+        "stage_uploaded": "✅ Uploaded",
+        "note_file_download_soon": "The file will start downloading soon.",
+        "note_link_download_soon": "The file link will start downloading soon.",
+        "note_youtube_download_soon": "Resolving the YouTube video and preparing the download.",
+        "note_enter_upload_queue": "The file will enter the upload queue after download.",
+        "note_downloading_link": "Downloading the file from the link.",
+        "note_downloading_youtube": "Downloading the YouTube video.",
+        "note_waiting_upload": "Waiting for upload to Rubika.",
+        "note_download_failed": "The file link download did not complete.",
+        "note_cancelled": "Transfer stopped.",
+        "note_upload_prepare": "Preparing the file for upload to {destination}.",
+        "note_upload_connecting": "Connecting to Rubika.",
+        "note_uploading": "Sending file to Rubika.",
+        "note_upload_finalizing": "Finalizing the upload in Rubika.",
+        "note_uploaded": "File uploaded to {destination} successfully.",
+        "note_uploaded_elapsed": "File uploaded to {destination} successfully in {elapsed}.",
+    },
+    "fa": {
+        "title": "WalrusHF",
+        "status": "وضعیت",
+        "note": "توضیح",
+        "file": "فایل",
+        "size": "حجم",
+        "id": "شناسه",
+        "download": "دانلود",
+        "upload": "آپلود",
+        "attempt": "تلاش",
+        "speed": "سرعت",
+        "eta": "زمان باقی‌مانده",
+        "queue": "صف",
+        "btn_status": "📊 وضعیت",
+        "btn_transfers": "📋 انتقال‌ها",
+        "btn_cleanup": "🧹 پاک‌سازی",
+        "btn_cancel": "🛑 لغو",
+        "btn_settings": "⚙️ تنظیمات",
+        "btn_retry": "🔁 تلاش دوباره",
+        "btn_language": "🌐 زبان",
+        "btn_change_account": "📱 تغییر حساب",
+        "btn_destination": "📬 مقصد",
+        "btn_back": "↩️ بازگشت",
+        "language_name": "فارسی",
+        "stage_preparing_download": "⏳ آماده‌سازی دانلود",
+        "stage_downloading": "⬇️ در حال دانلود",
+        "stage_youtube_prepare": "🎬 آماده‌سازی یوتیوب",
+        "stage_upload_queue": "⏳ صف آپلود",
+        "stage_download_failed": "❌ دانلود ناموفق",
+        "stage_cancelled": "🛑 لغو شد",
+        "stage_cancelling": "🛑 در حال لغو",
+        "stage_starting_upload": "🚀 شروع آپلود",
+        "stage_uploading": "🚀 در حال آپلود",
+        "stage_retrying": "⚠️ تلاش دوباره",
+        "stage_uploaded": "✅ آپلود شد",
+        "note_file_download_soon": "دانلود فایل به‌زودی شروع می‌شود.",
+        "note_link_download_soon": "دانلود لینک فایل به‌زودی شروع می‌شود.",
+        "note_youtube_download_soon": "ویدیوی یوتیوب بررسی می‌شود و دانلود آماده می‌شود.",
+        "note_enter_upload_queue": "بعد از دانلود، فایل وارد صف آپلود می‌شود.",
+        "note_downloading_link": "در حال دانلود فایل از لینک.",
+        "note_downloading_youtube": "در حال دانلود ویدیوی یوتیوب.",
+        "note_waiting_upload": "در انتظار آپلود به روبیکا.",
+        "note_download_failed": "دانلود لینک کامل نشد.",
+        "note_cancelled": "انتقال متوقف شد.",
+        "note_upload_prepare": "در حال آماده‌سازی فایل برای آپلود به {destination}.",
+        "note_upload_connecting": "در حال اتصال به روبیکا.",
+        "note_uploading": "در حال ارسال فایل به روبیکا.",
+        "note_upload_finalizing": "در حال نهایی‌سازی آپلود در روبیکا.",
+        "note_uploaded": "فایل با موفقیت در {destination} آپلود شد.",
+        "note_uploaded_elapsed": "فایل با موفقیت در {destination} آپلود شد. زمان: {elapsed}.",
+    },
+}
 WINDOWS_RESERVED_FILENAMES = {
     "CON",
     "PRN",
@@ -240,6 +345,20 @@ def ltr_code(text: str) -> str:
     return f"<code>{LRM}{escape(text)}{LRM}</code>"
 
 
+def normalize_language(language: str | None = None) -> str:
+    value = (language or "").strip().lower()
+    return value if value in SUPPORTED_LANGUAGES else "fa"
+
+
+def t(language: str | None, key: str, **kwargs) -> str:
+    lang = normalize_language(language)
+    text = TRANSLATIONS.get(lang, TRANSLATIONS["fa"]).get(
+        key,
+        TRANSLATIONS["en"].get(key, key),
+    )
+    return text.format(**kwargs) if kwargs else text
+
+
 def build_status_text(
     *,
     task_id: str,
@@ -254,7 +373,9 @@ def build_status_text(
     attempt_text: str | None = None,
     speed_text: str | None = None,
     eta_text: str | None = None,
+    language: str | None = None,
 ) -> str:
+    lang = normalize_language(language or os.getenv("WALRUS_LANGUAGE", "fa"))
     safe_task_id = task_id or "-"
     safe_file_name = truncate_middle(file_name or "file")
     safe_stage = escape(stage)
@@ -264,29 +385,29 @@ def build_status_text(
     safe_size = human_size(file_size)
 
     lines = [
-        "<b>⛵️ WalrusHF</b>",
-        f"📍 <b>Status:</b> {safe_stage}",
-        f"📝 <b>Note:</b> {safe_upload_status}",
+        f"<b>⛵️ {escape(t(lang, 'title'))}</b>",
+        f"📍 <b>{escape(t(lang, 'status'))}:</b> {safe_stage}",
+        f"📝 <b>{escape(t(lang, 'note'))}:</b> {safe_upload_status}",
         "",
-        f"📄 <b>File:</b> {ltr_code(safe_file_name)}",
-        f"📦 <b>Size:</b> {ltr_code(safe_size)}",
-        f"🆔 <b>ID:</b> {ltr_code(safe_task_id)}",
+        f"📄 <b>{escape(t(lang, 'file'))}:</b> {ltr_code(safe_file_name)}",
+        f"📦 <b>{escape(t(lang, 'size'))}:</b> {ltr_code(safe_size)}",
+        f"🆔 <b>{escape(t(lang, 'id'))}:</b> {ltr_code(safe_task_id)}",
         "",
-        f"⬇️ <b>Download:</b> {ltr_code(progress_meter(download_value))} {ltr_code(f'{download_value}%')}",
-        f"⬆️ <b>Upload:</b> {ltr_code(progress_meter(upload_value))} {ltr_code(f'{upload_value}%')}",
+        f"⬇️ <b>{escape(t(lang, 'download'))}:</b> {ltr_code(progress_meter(download_value))} {ltr_code(f'{download_value}%')}",
+        f"⬆️ <b>{escape(t(lang, 'upload'))}:</b> {ltr_code(progress_meter(upload_value))} {ltr_code(f'{upload_value}%')}",
     ]
 
     if attempt_text:
-        lines.append(f"🔁 <b>Attempt:</b> {ltr_code(attempt_text)}")
+        lines.append(f"🔁 <b>{escape(t(lang, 'attempt'))}:</b> {ltr_code(attempt_text)}")
 
     if speed_text:
-        lines.append(f"⚡ <b>Speed:</b> {ltr_code(speed_text)}")
+        lines.append(f"⚡ <b>{escape(t(lang, 'speed'))}:</b> {ltr_code(speed_text)}")
 
     if eta_text:
-        lines.append(f"⏱ <b>ETA:</b> {ltr_code(eta_text)}")
+        lines.append(f"⏱ <b>{escape(t(lang, 'eta'))}:</b> {ltr_code(eta_text)}")
 
     if queue_position is not None:
-        lines.append(f"⏳ <b>Queue:</b> {ltr_code(str(queue_position))}")
+        lines.append(f"⏳ <b>{escape(t(lang, 'queue'))}:</b> {ltr_code(str(queue_position))}")
 
     if note:
         lines.append(escape(note))
@@ -310,12 +431,14 @@ def env_runtime_settings() -> dict:
         "RUBIKA_TARGET_TYPE",
         "saved" if default_target == "me" else "custom",
     ).strip()
+    default_language = normalize_language(os.getenv("WALRUS_LANGUAGE", "fa"))
     return {
         "rubika_session": default_session,
         "rubika_phone": default_phone,
         "rubika_target": default_target,
         "rubika_target_title": default_target_title,
         "rubika_target_type": default_target_type,
+        "language": default_language,
     }
 
 
@@ -353,6 +476,7 @@ def normalize_runtime_settings(settings: Optional[dict] = None) -> dict:
         ).strip()
         or defaults["rubika_target_type"]
     )
+    language = normalize_language(settings.get("language") or defaults["language"])
 
     return {
         "rubika_session": rubika_session,
@@ -360,6 +484,7 @@ def normalize_runtime_settings(settings: Optional[dict] = None) -> dict:
         "rubika_target": rubika_target,
         "rubika_target_title": rubika_target_title,
         "rubika_target_type": rubika_target_type,
+        "language": language,
     }
 
 
@@ -385,6 +510,7 @@ def save_runtime_settings(settings: dict) -> dict:
         "rubika_target": normalized["rubika_target"],
         "rubika_target_title": normalized["rubika_target_title"],
         "rubika_target_type": normalized["rubika_target_type"],
+        "language": normalized["language"],
     }
     temp_path = SETTINGS_FILE.with_suffix(".tmp")
     temp_path.write_text(
@@ -401,6 +527,7 @@ def apply_runtime_settings(task: dict, settings: Optional[dict] = None) -> dict:
     task["rubika_target"] = runtime_settings["rubika_target"]
     task["rubika_target_title"] = runtime_settings["rubika_target_title"]
     task["rubika_target_type"] = runtime_settings["rubika_target_type"]
+    task["language"] = runtime_settings["language"]
     return task
 
 
