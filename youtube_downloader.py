@@ -84,9 +84,9 @@ def compact_youtube_error(error: Exception | str, language: str = "fa") -> str:
         return "این ویدیو خصوصی است و قابل دانلود نیست." if fa else "This video is private."
     if "sign in" in lower or "login" in lower or "cookies" in lower:
         return (
-            "یوتیوب برای این ویدیو ورود/کوکی می‌خواهد."
+            "یوتیوب برای این ویدیو ورود/کوکی می‌خواهد. فایل cookies.txt را بفرست و روی آن /youtube_cookies بزن، بعد لینک را دوباره ارسال کن."
             if fa
-            else "YouTube requires sign-in or cookies for this video."
+            else "YouTube requires sign-in or cookies for this video. Send cookies.txt, reply to it with /youtube_cookies, then retry the link."
         )
     if "age" in lower:
         return (
@@ -178,6 +178,7 @@ def download_youtube(
     progress,
     check_size,
     language: str = "fa",
+    cookies_path: Path | None = None,
 ) -> YouTubeDownloadResult:
     if not is_youtube_url(url):
         raise YouTubeDownloadError("Unsupported YouTube URL.")
@@ -223,6 +224,8 @@ def download_youtube(
         "merge_output_format": "mp4",
         "progress_hooks": [progress_hook],
     }
+    if cookies_path and cookies_path.exists():
+        options["cookiefile"] = str(cookies_path)
 
     try:
         with yt_dlp.YoutubeDL(options) as ydl:

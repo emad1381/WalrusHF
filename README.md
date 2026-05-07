@@ -117,6 +117,9 @@ WALRUS_MAX_FILE_BYTES=8589934592
 WALRUS_MIN_FREE_BYTES=536870912
 WALRUS_YOUTUBE_MAX_HEIGHT=720
 WALRUS_YOUTUBE_CONCURRENT_FRAGMENTS=4
+WALRUS_SPEEDTEST_DOWNLOAD_URL=https://speed.cloudflare.com/__down?bytes=1000000
+WALRUS_SPEEDTEST_RUBIKA_URL=https://rubika.ir
+WALRUS_SPEEDTEST_YOUTUBE_URL=https://www.youtube.com/generate_204
 ```
 
 Notes:
@@ -125,6 +128,7 @@ Notes:
 - `WALRUS_LANGUAGE=fa` makes the Telegram bot Persian by default. Use `en` for English.
 - `WALRUS_MAX_FILE_BYTES` defaults to 8 GiB.
 - YouTube downloads default to the best available MP4-compatible video up to 720p.
+- If YouTube asks for sign-in or cookies, export `cookies.txt`, send it to the bot, then reply to that file with `/youtube_cookies`.
 - Set `WALRUS_MAX_FILE_BYTES=0` to disable the app-level file size limit.
 - Telegram bot file downloads are limited by Telegram to 2 GB per file. For larger direct files, use the Space dashboard URL form instead.
 - `file://` links are disabled by default. Enable them only if you understand the risk:
@@ -150,6 +154,9 @@ After login, the Rubika session is saved under `/data/walrus/sessions`.
 - `/start` - open setup or main menu
 - `/settings` - show Rubika account and destination
 - `/set_rubika` - start Rubika login
+- `/youtube_cookies` - save a YouTube `cookies.txt` file by replying to it
+- `/clear_youtube_cookies` - remove saved YouTube cookies
+- `/speedtest` - measure current Space download speed plus Rubika/YouTube latency
 - `/status` - show queue, active transfers, failures, and storage
 - `/transfers` - list active, queued, and retryable transfers
 - `/cleanup` - preview removable files, stale upload state, and dead failed records

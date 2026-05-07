@@ -29,6 +29,7 @@ from rubpy import Client as RubikaClient
 import requests
 
 from task_store import (
+    DATA_DIR,
     DOWNLOAD_DIR,
     SESSION_DIR,
     apply_runtime_settings,
@@ -176,8 +177,10 @@ ACTIVE_DOWNLOADS: dict[str, dict] = {}
 COMMANDS_READY = False
 AUTH_SETUPS: dict[int, dict] = {}
 CHANNEL_CHOICES: dict[int, dict[str, dict]] = {}
+RECENT_CALLBACKS: dict[str, float] = {}
 BASE_DIR = Path(__file__).resolve().parent
 RUBIKA_AUTH_HELPER = BASE_DIR / "rubika_auth_helper.py"
+YOUTUBE_COOKIES_FILE = DATA_DIR / "youtube_cookies.txt"
 
 BTN_STATUS = "📊 Status"
 BTN_TRANSFERS = "📋 Transfers"
@@ -234,6 +237,15 @@ DIRECT_FILE_CONTENT_TYPES = {
 URL_PATTERN = re.compile(r"(?P<url>(?:https?|file)://\S+)", re.IGNORECASE)
 DIRECT_DOWNLOAD_MAX_RETRIES = 5
 DIRECT_DOWNLOAD_RETRY_DELAY = 3
+SPEEDTEST_DOWNLOAD_URL = os.getenv(
+    "WALRUS_SPEEDTEST_DOWNLOAD_URL",
+    "https://speed.cloudflare.com/__down?bytes=1000000",
+).strip()
+SPEEDTEST_RUBIKA_URL = os.getenv("WALRUS_SPEEDTEST_RUBIKA_URL", "https://rubika.ir").strip()
+SPEEDTEST_YOUTUBE_URL = os.getenv(
+    "WALRUS_SPEEDTEST_YOUTUBE_URL",
+    "https://www.youtube.com/generate_204",
+).strip()
 
 MENU_ACTION_KEYS = {
     "status": "btn_status",
@@ -279,6 +291,9 @@ BOT_COMMAND_LABELS = {
         "status": "Show queue and storage status",
         "transfers": "List active and queued transfers",
         "set_rubika": "Start Rubika number setup",
+        "youtube_cookies": "Save YouTube cookies.txt",
+        "clear_youtube_cookies": "Remove YouTube cookies",
+        "speedtest": "Test current Space network",
         "retry": "Retry a failed transfer",
         "retry_all": "Retry all failed transfers",
         "cleanup": "Clean safe download leftovers",
@@ -290,6 +305,9 @@ BOT_COMMAND_LABELS = {
         "status": "نمایش وضعیت صف و حافظه",
         "transfers": "نمایش انتقال‌های فعال و صف",
         "set_rubika": "شروع تنظیم شماره روبیکا",
+        "youtube_cookies": "ذخیره کوکی یوتیوب",
+        "clear_youtube_cookies": "حذف کوکی یوتیوب",
+        "speedtest": "تست سرعت شبکه",
         "retry": "تلاش دوباره برای انتقال ناموفق",
         "retry_all": "تلاش دوباره برای همه انتقال‌های ناموفق",
         "cleanup": "پاک‌سازی فایل‌های امن",
@@ -329,6 +347,9 @@ def is_owner(user_id: int | None) -> bool:
 
 
 async def ensure_authorized_message(message: Message) -> bool:
+    if getattr(message.from_user, "is_bot", False):
+        return False
+
     user_id = getattr(message.from_user, "id", None)
     if is_owner(user_id):
         return True
@@ -356,6 +377,22 @@ async def ensure_authorized_callback(callback_query: CallbackQuery) -> bool:
         await callback_query.answer()
     except Exception:
         pass
+    return False
+
+
+def callback_seen(callback_query: CallbackQuery) -> bool:
+    callback_id = getattr(callback_query, "id", None)
+    if not callback_id:
+        return False
+
+    now = time.time()
+    for key, seen_at in list(RECENT_CALLBACKS.items()):
+        if now - seen_at > 60:
+            RECENT_CALLBACKS.pop(key, None)
+
+    if callback_id in RECENT_CALLBACKS:
+        return True
+    RECENT_CALLBACKS[callback_id] = now
     return False
 
 
@@ -399,18 +436,22 @@ def main_action_keyboard() -> InlineKeyboardMarkup:
 
 
 def status_summary_keyboard(has_cleanup: bool) -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton("📋 Details", callback_data="menu:transfers")]]
+    lang = current_language()
+    details = "📋 جزئیات" if lang == "fa" else "📋 Details"
+    confirm = "🧹 تایید پاک‌سازی" if lang == "fa" else "🧹 Confirm Cleanup"
+    rows = [[InlineKeyboardButton(details, callback_data="menu:transfers")]]
     if has_cleanup:
-        rows.append([InlineKeyboardButton("🧹 Confirm Cleanup", callback_data="cleanup:confirm")])
-    rows.append([InlineKeyboardButton("⚙️ Settings", callback_data="menu:settings")])
+        rows.append([InlineKeyboardButton(confirm, callback_data="cleanup:confirm")])
+    rows.append([InlineKeyboardButton(tr(lang, "btn_settings"), callback_data="menu:settings")])
     return InlineKeyboardMarkup(rows)
 
 
 def cleanup_keyboard(has_candidates: bool) -> InlineKeyboardMarkup | None:
     if not has_candidates:
         return None
+    label = "✅ تایید پاک‌سازی" if current_language() == "fa" else "✅ Confirm cleanup"
     return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("✅ Confirm cleanup", callback_data="cleanup:confirm")]]
+        [[InlineKeyboardButton(label, callback_data="cleanup:confirm")]]
     )
 
 
@@ -462,21 +503,26 @@ def load_settings_with_phone() -> dict:
 
 def settings_action_keyboard() -> InlineKeyboardMarkup:
     lang = current_language()
+    next_lang = "en" if lang == "fa" else "fa"
+    language_label = "🌐 English" if next_lang == "en" else "🌐 فارسی"
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton(tr(lang, "btn_change_account"), callback_data="settings:session")],
             [InlineKeyboardButton(tr(lang, "btn_destination"), callback_data="settings:destination")],
-            [InlineKeyboardButton(tr(lang, "btn_language"), callback_data="settings:language")],
+            [InlineKeyboardButton(language_label, callback_data=f"settings:language:{next_lang}")],
         ]
     )
 
 
 def destination_action_keyboard() -> InlineKeyboardMarkup:
+    lang = current_language()
+    saved = "☁️ پیام‌های ذخیره‌شده" if lang == "fa" else "☁️ Saved Messages"
+    channel = "📣 انتخاب کانال" if lang == "fa" else "📣 Choose Channel"
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("☁️ Saved Messages", callback_data="destination:saved")],
-            [InlineKeyboardButton("📣 Choose Channel", callback_data="destination:channels")],
-            [InlineKeyboardButton("↩️ Back", callback_data="destination:back")],
+            [InlineKeyboardButton(saved, callback_data="destination:saved")],
+            [InlineKeyboardButton(channel, callback_data="destination:channels")],
+            [InlineKeyboardButton(tr(lang, "btn_back"), callback_data="destination:back")],
         ]
     )
 
@@ -567,6 +613,23 @@ async def send_settings_panel_to_chat(chat_id: int, note: str | None = None) -> 
     )
 
 
+async def render_settings_panel(message: Message, note: str | None = None) -> None:
+    text = build_settings_text(note)
+    markup = settings_action_keyboard()
+    try:
+        await message.edit_text(
+            text,
+            parse_mode=enums.ParseMode.HTML,
+            reply_markup=markup,
+        )
+    except Exception:
+        await message.reply_text(
+            text,
+            parse_mode=enums.ParseMode.HTML,
+            reply_markup=markup,
+        )
+
+
 def truncate_button_label(text: str, max_length: int = 38) -> str:
     text = " ".join(str(text or "").split()).strip() or "Untitled"
     if len(text) <= max_length:
@@ -576,6 +639,20 @@ def truncate_button_label(text: str, max_length: int = 38) -> str:
 
 def build_destination_text(note: str | None = None) -> str:
     settings = load_runtime_settings()
+    lang = settings["language"]
+    if lang == "fa":
+        lines = [
+            "<b>📬 مقصد آپلود</b>",
+            "",
+            f"مقصد فعلی: {ltr_code(format_destination_label(settings))}",
+            "",
+            "انتخاب کن فایل‌های بعدی کجا آپلود شوند.",
+            "انتقال‌هایی که قبلا وارد صف شده‌اند تغییر نمی‌کنند.",
+        ]
+        if note:
+            lines.extend(["", note])
+        return "\n".join(lines)
+
     lines = [
         "<b>📬 Upload Destination</b>",
         "",
@@ -1373,19 +1450,22 @@ def status_action_keyboard(task_id: str, action: str = "cancel") -> InlineKeyboa
 
 async def send_cancel_picker(message: Message) -> None:
     keyboard = build_cancel_keyboard()
+    lang = current_language()
     if not keyboard:
         await message.reply_text(
-            "🛑 There are no active transfers to cancel.",
+            "🛑 انتقال فعالی برای لغو وجود ندارد." if lang == "fa" else "🛑 There are no active transfers to cancel.",
             reply_markup=menu_keyboard(),
         )
         return
 
+    title = "🛑 لغو انتقال" if lang == "fa" else "🛑 Cancel Transfer"
+    body = "یک انتقال را انتخاب کن:" if lang == "fa" else "Choose one transfer:"
     await message.reply_text(
         "\n".join(
             [
-                "<b>🛑 Cancel Transfer</b>",
+                f"<b>{title}</b>",
                 "",
-                "Choose one transfer:",
+                body,
             ]
         ),
         parse_mode=enums.ParseMode.HTML,
@@ -1439,18 +1519,28 @@ async def run_cleanup(message: Message) -> None:
         cleared_stale_state = True
 
     pruned_failed_count = prune_dead_failed_entries()
+    lang = current_language()
+    if lang == "fa":
+        lines = [
+            "<b>🧹 پاک‌سازی انجام شد</b>",
+            "",
+            f"فایل‌های حذف‌شده: <b>{removed_count}</b>",
+            f"فضای آزادشده: <b>{human_size(total_size)}</b>",
+            f"وضعیت آپلود گیرکرده پاک شد: <b>{1 if cleared_stale_state else 0}</b>",
+            f"رکوردهای ناموفق مرده حذف شد: <b>{pruned_failed_count}</b>",
+        ]
+    else:
+        lines = [
+            "<b>🧹 Cleanup Complete</b>",
+            "",
+            f"Removed files: <b>{removed_count}</b>",
+            f"Freed space: <b>{human_size(total_size)}</b>",
+            f"Cleared stale upload state: <b>{1 if cleared_stale_state else 0}</b>",
+            f"Pruned dead failed records: <b>{pruned_failed_count}</b>",
+        ]
 
     await message.reply_text(
-        "\n".join(
-            [
-                "<b>🧹 Cleanup Complete</b>",
-                "",
-                f"Removed files: <b>{removed_count}</b>",
-                f"Freed space: <b>{human_size(total_size)}</b>",
-                f"Cleared stale upload state: <b>{1 if cleared_stale_state else 0}</b>",
-                f"Pruned dead failed records: <b>{pruned_failed_count}</b>",
-            ]
-        ),
+        "\n".join(lines),
         parse_mode=enums.ParseMode.HTML,
         reply_markup=main_action_keyboard(),
     )
@@ -1464,6 +1554,24 @@ def build_status_summary() -> str:
     files = iter_download_files()
     candidates = cleanup_candidates()
     settings = load_runtime_settings()
+    lang = settings["language"]
+    if lang == "fa":
+        lines = [
+            "<b>📊 وضعیت WalrusHF</b>",
+            "",
+            f"📱 <b>نشست روبیکا:</b> {ltr_code(settings['rubika_session'])}",
+            f"📬 <b>مقصد:</b> {ltr_code(format_destination_label(settings))}",
+            f"🌐 <b>زبان:</b> {ltr_code(tr(lang, 'language_name'))}",
+            f"🍪 <b>کوکی یوتیوب:</b> {ltr_code('ذخیره شده' if youtube_cookies_exist() else 'ندارد')}",
+            "",
+            f"⬇️ <b>دانلودهای فعال:</b> {ltr_code(str(len(active_downloads)))}",
+            f"🚀 <b>آپلودهای فعال:</b> {ltr_code(str(1 if processing else 0))}",
+            f"⏳ <b>در صف:</b> {ltr_code(str(len(queued)))}",
+            f"❌ <b>ناموفق:</b> {ltr_code(str(len(failed_entries)))}",
+            f"📁 <b>فایل‌های دانلودشده:</b> {ltr_code(f'{len(files)} / {human_size(sum_file_sizes(files))}')}",
+            f"🧹 <b>قابل پاک‌سازی:</b> {ltr_code(f'{len(candidates)} / {human_size(sum_file_sizes(candidates))}')}",
+        ]
+        return "\n".join(lines)
 
     lines = [
         "<b>📊 WalrusHF Status</b>",
@@ -1487,28 +1595,32 @@ def build_transfers_summary() -> str:
     active_downloads = visible_active_downloads()
     processing = visible_processing_task()
     failed_entries = read_failed_entries()
-    lines = ["<b>📋 Transfers</b>", ""]
+    lang = current_language()
+    lines = ["<b>📋 انتقال‌ها</b>" if lang == "fa" else "<b>📋 Transfers</b>", ""]
 
     if active_downloads:
-        lines.append("<b>⬇️ Downloading</b>")
+        lines.append("<b>⬇️ در حال دانلود</b>" if lang == "fa" else "<b>⬇️ Downloading</b>")
         for active in active_downloads[:5]:
             download_percent = active.get("download_percent", 0)
-            status = f"⬇️ <b>Download:</b> {ltr_code(f'{download_percent}%')}"
+            label = "دانلود" if lang == "fa" else "Download"
+            status = f"⬇️ <b>{label}:</b> {ltr_code(f'{download_percent}%')}"
             lines.append(compact_task_card("•", active, status))
             lines.append("")
         lines.append("")
 
     if processing:
-        lines.append("<b>🚀 Uploading</b>")
+        lines.append("<b>🚀 در حال آپلود</b>" if lang == "fa" else "<b>🚀 Uploading</b>")
         upload_percent = processing.get("upload_percent", 0)
-        status = f"⬆️ <b>Upload:</b> {ltr_code(f'{upload_percent}%')}"
+        label = "آپلود" if lang == "fa" else "Upload"
+        status = f"⬆️ <b>{label}:</b> {ltr_code(f'{upload_percent}%')}"
         if processing.get("attempt_text"):
-            status += f"\n🔁 <b>Attempt:</b> {ltr_code(processing['attempt_text'])}"
+            attempt = "تلاش" if lang == "fa" else "Attempt"
+            status += f"\n🔁 <b>{attempt}:</b> {ltr_code(processing['attempt_text'])}"
         lines.append(compact_task_card("•", processing, status))
         lines.append("")
 
     if queued:
-        lines.append("<b>⏳ Upload Queue</b>")
+        lines.append("<b>⏳ صف آپلود</b>" if lang == "fa" else "<b>⏳ Upload Queue</b>")
         for index, task in enumerate(queued[:8], start=1):
             lines.append(compact_task_card(f"{index}.", task))
             lines.append("")
@@ -1519,16 +1631,17 @@ def build_transfers_summary() -> str:
     retryable_failed = retryable_failed_tasks()
 
     if retryable_failed:
-        lines.append("<b>❌ Retryable Failed Transfers</b>")
+        lines.append("<b>❌ انتقال‌های ناموفق قابل تلاش دوباره</b>" if lang == "fa" else "<b>❌ Retryable Failed Transfers</b>")
         for task in retryable_failed[:5]:
-            lines.append(compact_task_card("•", task, "Tap a Retry button below."))
+            note = "دکمه تلاش دوباره را بزن." if lang == "fa" else "Tap a Retry button below."
+            lines.append(compact_task_card("•", task, note))
             lines.append("")
         if len(retryable_failed) > 5:
             lines.append(f"... and {len(retryable_failed) - 5} more")
         lines.append("")
 
     if len(lines) == 2:
-        lines.append("No active transfers right now.")
+        lines.append("الان انتقال فعالی وجود ندارد." if lang == "fa" else "No active transfers right now.")
 
     return "\n".join(lines)
 
@@ -1538,6 +1651,22 @@ def build_cleanup_preview() -> str:
     total_size = sum_file_sizes(candidates)
     stale_task = stale_processing_task()
     dead_failed_count = len(dead_failed_entries())
+    lang = current_language()
+    if lang == "fa":
+        lines = [
+            "<b>🧹 پاک‌سازی</b>",
+            "",
+            f"🗑 <b>فایل‌های قابل حذف:</b> {ltr_code(str(len(candidates)))}",
+            f"💾 <b>فضای آزادشونده:</b> {ltr_code(human_size(total_size))}",
+            f"🚀 <b>وضعیت آپلود گیرکرده:</b> {ltr_code('1' if stale_task else '0')}",
+            f"❌ <b>رکوردهای ناموفق مرده:</b> {ltr_code(str(dead_failed_count))}",
+        ]
+        if candidates or stale_task or dead_failed_count:
+            lines.extend(["", "فقط مواردی پاک می‌شوند که فعال، در صف، یا قابل تلاش دوباره نیستند."])
+        else:
+            lines.append("چیزی برای پاک‌سازی نیست.")
+        return "\n".join(lines)
+
     lines = [
         "<b>🧹 Cleanup</b>",
         "",
@@ -1603,16 +1732,17 @@ def path_name_from_url(url: str) -> str:
 
 
 def summarize_batch_item(result: dict) -> str:
+    lang = current_language()
     icon_map = {
         "queued": "✅",
         "cancelled": "🛑",
         "failed": "❌",
     }
-    status_map = {
-        "queued": "Queued",
-        "cancelled": "Cancelled",
-        "failed": "Failed",
-    }
+    status_map = (
+        {"queued": "در صف", "cancelled": "لغو شد", "failed": "ناموفق"}
+        if lang == "fa"
+        else {"queued": "Queued", "cancelled": "Cancelled", "failed": "Failed"}
+    )
     icon = icon_map.get(result.get("status"), "•")
     status = status_map.get(result.get("status"), "Updated")
     file_name = safe_filename(result.get("file_name"), "file.bin")
@@ -1621,21 +1751,32 @@ def summarize_batch_item(result: dict) -> str:
 
 
 def build_batch_summary_text(results: list[dict]) -> str:
+    lang = current_language()
     queued = sum(1 for result in results if result.get("status") == "queued")
     cancelled = sum(1 for result in results if result.get("status") == "cancelled")
     failed = sum(1 for result in results if result.get("status") == "failed")
 
-    lines = [
-        "<b>📦 Batch Finished</b>",
-        "",
-        f"🔗 <b>Links:</b> {ltr_code(str(len(results)))}",
-        f"✅ <b>Queued:</b> {ltr_code(str(queued))}",
-        f"🛑 <b>Cancelled:</b> {ltr_code(str(cancelled))}",
-        f"❌ <b>Failed:</b> {ltr_code(str(failed))}",
-    ]
+    if lang == "fa":
+        lines = [
+            "<b>📦 پردازش گروهی تمام شد</b>",
+            "",
+            f"🔗 <b>لینک‌ها:</b> {ltr_code(str(len(results)))}",
+            f"✅ <b>در صف:</b> {ltr_code(str(queued))}",
+            f"🛑 <b>لغوشده:</b> {ltr_code(str(cancelled))}",
+            f"❌ <b>ناموفق:</b> {ltr_code(str(failed))}",
+        ]
+    else:
+        lines = [
+            "<b>📦 Batch Finished</b>",
+            "",
+            f"🔗 <b>Links:</b> {ltr_code(str(len(results)))}",
+            f"✅ <b>Queued:</b> {ltr_code(str(queued))}",
+            f"🛑 <b>Cancelled:</b> {ltr_code(str(cancelled))}",
+            f"❌ <b>Failed:</b> {ltr_code(str(failed))}",
+        ]
 
     if results:
-        lines.extend(["", "<b>Items</b>"])
+        lines.extend(["", "<b>موارد</b>" if lang == "fa" else "<b>Items</b>"])
         for result in results[:8]:
             lines.append(summarize_batch_item(result))
         if len(results) > 8:
@@ -1654,6 +1795,91 @@ def is_supported_file_content_type(content_type: str) -> bool:
         media_type.startswith(("video/", "audio/", "image/"))
         or media_type in DIRECT_FILE_CONTENT_TYPES
     )
+
+
+def youtube_cookies_exist() -> bool:
+    return YOUTUBE_COOKIES_FILE.exists() and YOUTUBE_COOKIES_FILE.stat().st_size > 0
+
+
+def valid_youtube_cookie_text(text: str) -> bool:
+    normalized = text.replace("\r\n", "\n").strip()
+    if not normalized:
+        return False
+    if "# Netscape HTTP Cookie File" in normalized:
+        return True
+    return ".youtube.com" in normalized or "\tyoutube.com\t" in normalized
+
+
+def youtube_cookie_help_text(language: str | None = None) -> str:
+    lang = normalize_language(language or current_language())
+    if lang == "fa":
+        return "\n".join(
+            [
+                "<b>🍪 کوکی یوتیوب</b>",
+                "",
+                "برای ویدیوهایی که یوتیوب پیام ورود یا bot-check می‌دهد، فایل cookies.txt لازم است.",
+                "",
+                "روش استفاده:",
+                "1. با افزونه‌هایی مثل Get cookies.txt از مرورگری که داخل YouTube لاگین است، cookies.txt بگیر.",
+                "2. فایل را در تلگرام برای ربات بفرست.",
+                "3. روی همان فایل ریپلای کن و بنویس /youtube_cookies",
+                "",
+                "برای حذف کوکی‌ها: /clear_youtube_cookies",
+            ]
+        )
+    return "\n".join(
+        [
+            "<b>🍪 YouTube Cookies</b>",
+            "",
+            "Some YouTube videos require a cookies.txt file because YouTube asks for sign-in or bot checks.",
+            "",
+            "How to use:",
+            "1. Export cookies.txt from a browser signed in to YouTube.",
+            "2. Send the file to this bot.",
+            "3. Reply to that file with /youtube_cookies.",
+            "",
+            "Remove cookies with /clear_youtube_cookies.",
+        ]
+    )
+
+
+async def save_youtube_cookies_from_message(message: Message) -> tuple[bool, str]:
+    command_text = message.text or ""
+    inline_text = command_text.split(maxsplit=1)[1] if len(command_text.split(maxsplit=1)) > 1 else ""
+    source_text = inline_text
+
+    if not source_text and message.reply_to_message and message.reply_to_message.text:
+        source_text = message.reply_to_message.text
+
+    if source_text:
+        if not valid_youtube_cookie_text(source_text):
+            return False, "متن کوکی معتبر نیست." if current_language() == "fa" else "The cookie text does not look valid."
+        YOUTUBE_COOKIES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        YOUTUBE_COOKIES_FILE.write_text(source_text.strip() + "\n", encoding="utf-8")
+        return True, ""
+
+    replied = message.reply_to_message
+    document = replied.document if replied else None
+    if not document:
+        return False, ""
+
+    file_size = int(getattr(document, "file_size", 0) or 0)
+    if file_size > 2 * 1024 * 1024:
+        return False, "فایل کوکی خیلی بزرگ است." if current_language() == "fa" else "The cookie file is too large."
+
+    temp_path = YOUTUBE_COOKIES_FILE.with_suffix(".tmp")
+    downloaded = await app.download_media(replied, file_name=str(temp_path))
+    if not downloaded:
+        return False, "دانلود فایل کوکی ناموفق بود." if current_language() == "fa" else "Could not download the cookie file."
+
+    text = Path(downloaded).read_text(encoding="utf-8", errors="replace")
+    if not valid_youtube_cookie_text(text):
+        Path(downloaded).unlink(missing_ok=True)
+        return False, "فایل کوکی معتبر نیست." if current_language() == "fa" else "The cookie file does not look valid."
+
+    YOUTUBE_COOKIES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    Path(downloaded).replace(YOUTUBE_COOKIES_FILE)
+    return True, ""
 
 
 def max_file_size_text() -> str:
@@ -1680,6 +1906,138 @@ def ensure_download_space(expected_size: int = 0) -> None:
             "Not enough Space disk available for this transfer "
             f"({human_size(usage.free)} free, need about {human_size(needed)})."
         )
+
+
+def measure_http_latency(url: str, timeout: float = 10.0) -> dict:
+    started = time.monotonic()
+    try:
+        response = requests.get(url, timeout=(5, timeout), stream=True)
+        try:
+            for _chunk in response.iter_content(chunk_size=1):
+                break
+        finally:
+            response.close()
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        return {
+            "ok": response.status_code < 500,
+            "status": response.status_code,
+            "latency_ms": elapsed_ms,
+            "error": "",
+        }
+    except Exception as error:
+        return {
+            "ok": False,
+            "status": 0,
+            "latency_ms": 0,
+            "error": str(error)[:140],
+        }
+
+
+def measure_download_speed(url: str, timeout: float = 20.0) -> dict:
+    started = time.monotonic()
+    downloaded = 0
+    try:
+        with requests.get(url, timeout=(5, timeout), stream=True) as response:
+            response.raise_for_status()
+            for chunk in response.iter_content(chunk_size=1024 * 64):
+                if not chunk:
+                    continue
+                downloaded += len(chunk)
+                if downloaded >= 1024 * 1024:
+                    break
+        elapsed = max(0.001, time.monotonic() - started)
+        mbps = (downloaded * 8) / elapsed / 1_000_000
+        return {
+            "ok": downloaded > 0,
+            "bytes": downloaded,
+            "elapsed": elapsed,
+            "mbps": mbps,
+            "error": "",
+        }
+    except Exception as error:
+        return {
+            "ok": False,
+            "bytes": downloaded,
+            "elapsed": max(0.001, time.monotonic() - started),
+            "mbps": 0.0,
+            "error": str(error)[:140],
+        }
+
+
+def network_score(download: dict, rubika: dict, youtube: dict) -> tuple[int, str]:
+    score = 0
+    mbps = float(download.get("mbps") or 0)
+    rubika_latency = int(rubika.get("latency_ms") or 9999)
+    youtube_latency = int(youtube.get("latency_ms") or 9999)
+
+    if download.get("ok"):
+        score += 35 if mbps >= 20 else 28 if mbps >= 10 else 20 if mbps >= 3 else 10
+    if rubika.get("ok"):
+        score += 30 if rubika_latency <= 250 else 22 if rubika_latency <= 600 else 12
+    if youtube.get("ok"):
+        score += 25 if youtube_latency <= 350 else 18 if youtube_latency <= 800 else 10
+    score += 10
+    score = max(0, min(100, score))
+
+    grade = "عالی" if score >= 85 else "خوب" if score >= 70 else "متوسط" if score >= 50 else "ضعیف"
+    return score, grade
+
+
+def build_speedtest_text(download: dict, rubika: dict, youtube: dict) -> str:
+    lang = current_language()
+    score, grade_fa = network_score(download, rubika, youtube)
+    grade_en = "Excellent" if score >= 85 else "Good" if score >= 70 else "Fair" if score >= 50 else "Poor"
+    download_speed = f"{float(download.get('mbps') or 0):.2f} Mbps"
+    rubika_ping = f"{rubika.get('latency_ms') or '-'} ms"
+    youtube_ping = f"{youtube.get('latency_ms') or '-'} ms"
+
+    if lang == "fa":
+        lines = [
+            "<b>🚦 تست سرعت WalrusHF</b>",
+            "",
+            f"📥 <b>دانلود سرور:</b> {ltr_code(download_speed)}",
+            f"🔷 <b>پینگ روبیکا:</b> {ltr_code(rubika_ping)}",
+            f"▶️ <b>پینگ یوتیوب:</b> {ltr_code(youtube_ping)}",
+            "",
+            f"🏁 <b>امتیاز شبکه:</b> {ltr_code(f'{score}/100')} - {grade_fa}",
+        ]
+        if not download.get("ok"):
+            lines.append(f"⚠️ خطای تست دانلود: {download.get('error')}")
+        if not rubika.get("ok"):
+            lines.append(f"⚠️ خطای روبیکا: {rubika.get('error')}")
+        if not youtube.get("ok"):
+            lines.append(f"⚠️ خطای یوتیوب: {youtube.get('error')}")
+        lines.append("")
+        lines.append("این تست وضعیت شبکه Space را می‌سنجد؛ سرعت نهایی آپلود روبیکا ممکن است با محدودیت خود روبیکا فرق کند.")
+        return "\n".join(lines)
+
+    lines = [
+        "<b>🚦 WalrusHF Speed Test</b>",
+        "",
+        f"📥 <b>Server download:</b> {ltr_code(download_speed)}",
+        f"🔷 <b>Rubika ping:</b> {ltr_code(rubika_ping)}",
+        f"▶️ <b>YouTube ping:</b> {ltr_code(youtube_ping)}",
+        "",
+        f"🏁 <b>Network score:</b> {ltr_code(f'{score}/100')} - {grade_en}",
+    ]
+    if not download.get("ok"):
+        lines.append(f"⚠️ Download test error: {download.get('error')}")
+    if not rubika.get("ok"):
+        lines.append(f"⚠️ Rubika error: {rubika.get('error')}")
+    if not youtube.get("ok"):
+        lines.append(f"⚠️ YouTube error: {youtube.get('error')}")
+    lines.append("")
+    lines.append("This measures the Space network. Final Rubika upload speed can still be limited by Rubika itself.")
+    return "\n".join(lines)
+
+
+async def run_speedtest() -> str:
+    download, rubika, youtube = await asyncio.gather(
+        asyncio.to_thread(measure_download_speed, SPEEDTEST_DOWNLOAD_URL),
+        asyncio.to_thread(measure_http_latency, SPEEDTEST_RUBIKA_URL),
+        asyncio.to_thread(measure_http_latency, SPEEDTEST_YOUTUBE_URL),
+    )
+    return build_speedtest_text(download, rubika, youtube)
 
 
 def build_url_download_filename(url: str, task_id: str, fallback_suffix: str = ".bin") -> str:
@@ -2620,6 +2978,67 @@ async def retry_all_handler(client: Client, message: Message):
     await retry_all_failed_tasks(client, message)
 
 
+@app.on_message(filters.private & filters.command("youtube_cookies"))
+async def youtube_cookies_handler(client: Client, message: Message):
+    if not await ensure_authorized_message(message):
+        return
+    await ensure_bot_commands(client)
+
+    saved, error = await save_youtube_cookies_from_message(message)
+    lang = current_language()
+    if saved:
+        text = (
+            "✅ کوکی یوتیوب ذخیره شد. حالا لینک یوتیوب را دوباره بفرست."
+            if lang == "fa"
+            else "✅ YouTube cookies saved. Send the YouTube link again now."
+        )
+        await message.reply_text(text, reply_markup=menu_keyboard())
+        return
+
+    if error:
+        await message.reply_text(f"⚠️ {error}\n\n{youtube_cookie_help_text(lang)}", parse_mode=enums.ParseMode.HTML)
+        return
+
+    await message.reply_text(
+        youtube_cookie_help_text(lang),
+        parse_mode=enums.ParseMode.HTML,
+        reply_markup=menu_keyboard(),
+    )
+
+
+@app.on_message(filters.private & filters.command("clear_youtube_cookies"))
+async def clear_youtube_cookies_handler(client: Client, message: Message):
+    if not await ensure_authorized_message(message):
+        return
+    await ensure_bot_commands(client)
+
+    try:
+        YOUTUBE_COOKIES_FILE.unlink(missing_ok=True)
+    except OSError as error:
+        await message.reply_text(f"⚠️ {error}", reply_markup=menu_keyboard())
+        return
+
+    text = "✅ کوکی یوتیوب حذف شد." if current_language() == "fa" else "✅ YouTube cookies removed."
+    await message.reply_text(text, reply_markup=menu_keyboard())
+
+
+@app.on_message(filters.private & filters.command("speedtest"))
+async def speedtest_handler(client: Client, message: Message):
+    if not await ensure_authorized_message(message):
+        return
+    await ensure_bot_commands(client)
+
+    lang = current_language()
+    waiting = "⏳ در حال تست شبکه Space..." if lang == "fa" else "⏳ Testing the Space network..."
+    status = await message.reply_text(waiting)
+    try:
+        text = await run_speedtest()
+        await status.edit_text(text, parse_mode=enums.ParseMode.HTML, reply_markup=main_action_keyboard())
+    except Exception as error:
+        failed = "تست سرعت ناموفق بود" if lang == "fa" else "Speed test failed"
+        await status.edit_text(f"⚠️ {failed}: {error}", reply_markup=menu_keyboard())
+
+
 @app.on_message(filters.private & MENU_BUTTON_FILTER)
 async def menu_button_handler(client: Client, message: Message):
     if not await ensure_authorized_message(message):
@@ -2643,6 +3062,9 @@ async def menu_button_handler(client: Client, message: Message):
 async def menu_callback_handler(client: Client, callback_query: CallbackQuery):
     if not await ensure_authorized_callback(callback_query):
         return
+    if callback_seen(callback_query):
+        await callback_query.answer()
+        return
     action = (callback_query.data or "").split(":", 1)[1].strip()
     await callback_query.answer()
 
@@ -2655,14 +3077,18 @@ async def menu_callback_handler(client: Client, callback_query: CallbackQuery):
     elif action == "cancel":
         await send_cancel_picker(callback_query.message)
     elif action == "settings":
-        await send_settings_panel(callback_query.message)
+        await render_settings_panel(callback_query.message)
 
 
 @app.on_callback_query(filters.regex(r"^settings:"))
 async def settings_callback_handler(client: Client, callback_query: CallbackQuery):
     if not await ensure_authorized_callback(callback_query):
         return
-    action = (callback_query.data or "").split(":", 1)[1].strip()
+    if callback_seen(callback_query):
+        await callback_query.answer()
+        return
+    parts = (callback_query.data or "").split(":")
+    action = parts[1] if len(parts) > 1 else ""
     await callback_query.answer()
 
     if action == "session":
@@ -2671,20 +3097,30 @@ async def settings_callback_handler(client: Client, callback_query: CallbackQuer
         await send_destination_panel(callback_query.message)
     elif action == "language":
         settings = load_runtime_settings()
-        settings["language"] = "en" if settings.get("language") == "fa" else "fa"
+        requested_language = parts[2] if len(parts) > 2 else ""
+        settings["language"] = (
+            normalize_language(requested_language)
+            if requested_language
+            else ("en" if settings.get("language") == "fa" else "fa")
+        )
         save_runtime_settings(settings)
+        global COMMANDS_READY
+        COMMANDS_READY = False
         await ensure_bot_commands(client)
         note = (
             "✅ Language changed to English."
             if settings["language"] == "en"
             else "✅ زبان ربات فارسی شد."
         )
-        await send_settings_panel(callback_query.message, note=note)
+        await render_settings_panel(callback_query.message, note=note)
 
 
 @app.on_callback_query(filters.regex(r"^destination:"))
 async def destination_callback_handler(client: Client, callback_query: CallbackQuery):
     if not await ensure_authorized_callback(callback_query):
+        return
+    if callback_seen(callback_query):
+        await callback_query.answer()
         return
 
     parts = (callback_query.data or "").split(":")
@@ -2778,6 +3214,9 @@ async def destination_callback_handler(client: Client, callback_query: CallbackQ
 async def auth_cancel_callback_handler(client: Client, callback_query: CallbackQuery):
     if not await ensure_authorized_callback(callback_query):
         return
+    if callback_seen(callback_query):
+        await callback_query.answer()
+        return
     await callback_query.answer("Rubika setup cancelled.")
     await cancel_auth_setup(callback_query.message)
 
@@ -2785,6 +3224,9 @@ async def auth_cancel_callback_handler(client: Client, callback_query: CallbackQ
 @app.on_callback_query(filters.regex(r"^cleanup:confirm$"))
 async def cleanup_callback_handler(client: Client, callback_query: CallbackQuery):
     if not await ensure_authorized_callback(callback_query):
+        return
+    if callback_seen(callback_query):
+        await callback_query.answer()
         return
     await callback_query.answer("Cleanup started.")
 
@@ -2799,6 +3241,9 @@ async def cleanup_callback_handler(client: Client, callback_query: CallbackQuery
 @app.on_callback_query(filters.regex(r"^cancel:"))
 async def cancel_callback_handler(client: Client, callback_query: CallbackQuery):
     if not await ensure_authorized_callback(callback_query):
+        return
+    if callback_seen(callback_query):
+        await callback_query.answer()
         return
     task_id = (callback_query.data or "").split(":", 1)[1].strip()
     await callback_query.answer("Cancel requested.")
@@ -2815,6 +3260,9 @@ async def cancel_callback_handler(client: Client, callback_query: CallbackQuery)
 async def retry_callback_handler(client: Client, callback_query: CallbackQuery):
     if not await ensure_authorized_callback(callback_query):
         return
+    if callback_seen(callback_query):
+        await callback_query.answer()
+        return
     task_id = (callback_query.data or "").split(":", 1)[1].strip()
     await callback_query.answer("Retry queued.")
 
@@ -2829,6 +3277,9 @@ async def retry_callback_handler(client: Client, callback_query: CallbackQuery):
 @app.on_callback_query(filters.regex(r"^retry_all$"))
 async def retry_all_callback_handler(client: Client, callback_query: CallbackQuery):
     if not await ensure_authorized_callback(callback_query):
+        return
+    if callback_seen(callback_query):
+        await callback_query.answer()
         return
     await callback_query.answer("Retrying all failed transfers.")
 
@@ -3184,6 +3635,7 @@ async def process_youtube_url(message: Message, url: str) -> dict:
             progress=make_youtube_download_progress_callback(task_id, status, task_meta),
             check_size=check_youtube_size,
             language=language,
+            cookies_path=YOUTUBE_COOKIES_FILE if youtube_cookies_exist() else None,
         )
 
         if ACTIVE_DOWNLOADS.get(task_id, {}).get("cancelled"):
@@ -3269,8 +3721,13 @@ async def direct_file_url_handler(_client: Client, message: Message):
         return
 
     if len(urls) > 1:
+        found_text = (
+            f"🔗 {len(urls)} لینک پیدا شد. دانلودها شروع می‌شوند."
+            if current_language() == "fa"
+            else f"🔗 Found {len(urls)} links. Starting downloads now."
+        )
         await message.reply_text(
-            f"🔗 Found {len(urls)} links. Starting downloads now.",
+            found_text,
             reply_markup=menu_keyboard(),
         )
 
