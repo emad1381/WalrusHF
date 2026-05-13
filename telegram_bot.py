@@ -418,7 +418,7 @@ def build_menu_text() -> str:
         destination_label = "Destination"
     return "\n".join(
         [
-            "<b>⛵️ WalrusHF v1.2.3</b>",
+            "<b>⛵️ WalrusHF v1.2.4</b>",
             intro,
             "",
             f"📱 <b>{session_label}:</b> {ltr_code(settings['rubika_session'])}",
@@ -1852,6 +1852,28 @@ def youtube_cookie_help_text(language: str | None = None) -> str:
     )
 
 
+def _merge_cookie_texts(existing_text: str, new_text: str) -> str:
+    """Merge two Netscape cookie files, deduplicating by (domain, name, path)."""
+    header = "# Netscape HTTP Cookie File\n"
+    seen: dict[tuple[str, str, str], str] = {}  # (domain, name, path) -> full line
+
+    for text in (existing_text, new_text):
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            parts = stripped.split("\t")
+            if len(parts) >= 7:
+                domain = parts[0].strip()
+                path = parts[2].strip()
+                name = parts[5].strip()
+                key = (domain, name, path)
+                seen[key] = stripped  # newer value overwrites older
+
+    lines = sorted(seen.values())
+    return header + "\n".join(lines) + "\n"
+
+
 async def save_youtube_cookies_from_message(message: Message) -> tuple[bool, str]:
     command_text = message.text or ""
     inline_text = command_text.split(maxsplit=1)[1] if len(command_text.split(maxsplit=1)) > 1 else ""
@@ -1864,7 +1886,9 @@ async def save_youtube_cookies_from_message(message: Message) -> tuple[bool, str
         if not valid_youtube_cookie_text(source_text):
             return False, "متن کوکی معتبر نیست." if current_language() == "fa" else "The cookie text does not look valid."
         YOUTUBE_COOKIES_FILE.parent.mkdir(parents=True, exist_ok=True)
-        YOUTUBE_COOKIES_FILE.write_text(source_text.strip() + "\n", encoding="utf-8")
+        existing = YOUTUBE_COOKIES_FILE.read_text(encoding="utf-8", errors="replace") if YOUTUBE_COOKIES_FILE.exists() else ""
+        merged = _merge_cookie_texts(existing, source_text)
+        YOUTUBE_COOKIES_FILE.write_text(merged, encoding="utf-8")
         return True, ""
 
     replied = message.reply_to_message
@@ -1881,13 +1905,15 @@ async def save_youtube_cookies_from_message(message: Message) -> tuple[bool, str
     if not downloaded:
         return False, "دانلود فایل کوکی ناموفق بود." if current_language() == "fa" else "Could not download the cookie file."
 
-    text = Path(downloaded).read_text(encoding="utf-8", errors="replace")
-    if not valid_youtube_cookie_text(text):
-        Path(downloaded).unlink(missing_ok=True)
+    new_text = Path(downloaded).read_text(encoding="utf-8", errors="replace")
+    Path(downloaded).unlink(missing_ok=True)
+    if not valid_youtube_cookie_text(new_text):
         return False, "فایل کوکی معتبر نیست." if current_language() == "fa" else "The cookie file does not look valid."
 
     YOUTUBE_COOKIES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    Path(downloaded).replace(YOUTUBE_COOKIES_FILE)
+    existing = YOUTUBE_COOKIES_FILE.read_text(encoding="utf-8", errors="replace") if YOUTUBE_COOKIES_FILE.exists() else ""
+    merged = _merge_cookie_texts(existing, new_text)
+    YOUTUBE_COOKIES_FILE.write_text(merged, encoding="utf-8")
     return True, ""
 
 
@@ -2996,12 +3022,52 @@ async def youtube_cookies_handler(client: Client, message: Message):
     saved, error = await save_youtube_cookies_from_message(message)
     lang = current_language()
     if saved:
-        text = (
-            "✅ کوکی یوتیوب ذخیره شد. حالا لینک یوتیوب را دوباره بفرست."
-            if lang == "fa"
-            else "✅ YouTube cookies saved. Send the YouTube link again now."
-        )
-        await message.reply_text(text, reply_markup=menu_keyboard())
+        # Show a summary of what domains are now in the cookie file
+        try:
+            result = await asyncio.to_thread(validate_youtube_cookies, YOUTUBE_COOKIES_FILE)
+            has_yt = result.get("has_youtube", False)
+            has_google = result.get("has_google", False)
+            domain_list = result.get("domain_list", [])
+            domains_text = ", ".join(domain_list[:10]) if domain_list else "?"
+            if lang == "fa":
+                text = (
+                    f"✅ کوکی ذخیره و ادغام شد.\n"
+                    f"🌐 دامنه‌ها: <code>{domains_text}</code>\n"
+                    f"▶️ YouTube: {'✅' if has_yt else '❌'} | Google: {'✅' if has_google else '❌'}\n"
+                )
+                if has_yt and has_google:
+                    text += "\n🎉 عالی! هر دو دامنه موجود هستند. حالا لینک یوتیوب را بفرست."
+                elif has_yt and not has_google:
+                    text += (
+                        "\n⚠️ دامنه google.com هنوز نیست!\n"
+                        "برو به google.com، کوکی رو اکسپورت کن، بفرست و دوباره /youtube_cookies بزن.\n"
+                        "کوکی‌های قبلی حفظ میشن و ادغام میشه."
+                    )
+                else:
+                    text += "\nحالا لینک یوتیوب را بفرست."
+            else:
+                text = (
+                    f"✅ Cookies saved and merged.\n"
+                    f"🌐 Domains: <code>{domains_text}</code>\n"
+                    f"▶️ YouTube: {'✅' if has_yt else '❌'} | Google: {'✅' if has_google else '❌'}\n"
+                )
+                if has_yt and has_google:
+                    text += "\n🎉 Both domains present. Send the YouTube link now."
+                elif has_yt and not has_google:
+                    text += (
+                        "\n⚠️ google.com cookies still missing!\n"
+                        "Go to google.com, export cookies, send here and /youtube_cookies again.\n"
+                        "Existing cookies are kept and merged."
+                    )
+                else:
+                    text += "\nSend the YouTube link again now."
+        except Exception:
+            text = (
+                "✅ کوکی ذخیره شد. حالا لینک یوتیوب را دوباره بفرست."
+                if lang == "fa"
+                else "✅ YouTube cookies saved. Send the YouTube link again now."
+            )
+        await message.reply_text(text, parse_mode=enums.ParseMode.HTML, reply_markup=menu_keyboard())
         return
 
     if error:

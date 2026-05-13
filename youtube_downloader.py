@@ -193,7 +193,8 @@ def fetch_youtube_formats(
                 fmt_str = (
                     f"bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/"
                     f"bestvideo[height<={height}]+bestaudio/"
-                    f"best[height<={height}][ext=mp4]/best[height<={height}]/best"
+                    f"best[height<={height}][ext=mp4]/best[height<={height}]/"
+                    f"bestvideo+bestaudio/best"
                 )
             else:
                 fmt_str = f"best[height<={height}][ext=mp4]/best[height<={height}]/best"
@@ -505,6 +506,7 @@ def download_youtube(
         "fragment_retries": 10,
         "socket_timeout": 30,
         "continuedl": True,
+        "age_limit": 100,
         "concurrent_fragment_downloads": youtube_concurrent_fragments(),
         "progress_hooks": [progress_hook],
     }
@@ -528,7 +530,20 @@ def download_youtube(
                     check_size(estimated_size)
                     progress(0, estimated_size)
 
-            info = ydl.extract_info(url, download=True)
+            try:
+                info = ydl.extract_info(url, download=True)
+            except Exception as fmt_error:
+                fmt_err_text = str(fmt_error).lower()
+                if "format" in fmt_err_text and "not available" in fmt_err_text and chosen_format:
+                    # Retry with most permissive format
+                    print(f"YouTube format retry: '{chosen_format}' not available, falling back.", flush=True)
+                    cleanup_youtube_partials(output_dir, task_id)
+                    fallback = "bestvideo+bestaudio/best" if ffmpeg_available() else "best"
+                    options["format"] = fallback
+                    with yt_dlp.YoutubeDL(options) as ydl2:
+                        info = ydl2.extract_info(url, download=True)
+                else:
+                    raise
     except YouTubeDownloadCancelled:
         cleanup_youtube_partials(output_dir, task_id)
         raise
