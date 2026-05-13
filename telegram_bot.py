@@ -418,7 +418,7 @@ def build_menu_text() -> str:
         destination_label = "Destination"
     return "\n".join(
         [
-            "<b>⛵️ WalrusHF v1.2.6</b>",
+            "<b>⛵️ WalrusHF v1.2.7</b>",
             intro,
             "",
             f"📱 <b>{session_label}:</b> {ltr_code(settings['rubika_session'])}",
@@ -3125,7 +3125,15 @@ async def check_cookie_handler(client: Client, message: Message):
             if domain_list:
                 lines.append(f"📋 <b>لیست دامنه‌ها:</b> <code>{', '.join(domain_list[:10])}</code>")
             lines.append(f"✅ <b>فرمت معتبر:</b> {'بله' if result['valid_format'] else '❌ خیر'}")
-            lines.append(f"🔑 <b>عملکرد:</b> {'✅ فعال' if result['working'] else '❌ غیرفعال'}")
+            lines.append(f"🔑 <b>عملکرد (ویدیو معمولی):</b> {'✅ فعال' if result['working'] else '❌ غیرفعال'}")
+            age_ok = result.get("age_restricted_ok")
+            if age_ok is True:
+                lines.append("🔞 <b>ویدیوی محدودیت سنی:</b> ✅ کوکی‌ها کار می‌کنند")
+            elif age_ok is False:
+                age_err = result.get("age_restricted_error", "")
+                lines.append(f"🔞 <b>ویدیوی محدودیت سنی:</b> ❌ کوکی‌ها کافی نیستند")
+                if age_err:
+                    lines.append(f"   خطا: <code>{escape(age_err[:100])}</code>")
             if not result.get("has_google"):
                 lines.extend(["", "⚠️ <b>هشدار:</b> کوکی‌های google.com وجود ندارند!"])
                 lines.append("ویدیوهای دارای محدودیت سنی نیاز به کوکی هر دو دامنه google.com و youtube.com دارند.")
@@ -3136,10 +3144,11 @@ async def check_cookie_handler(client: Client, message: Message):
             lines.extend(["", "💡 فایل cookies.txt را بفرست و روی آن /youtube_cookies بزن."])
         elif not result["working"] and not result.get("error"):
             lines.extend(["", "💡 کوکی‌ها منقضی شده‌اند. کوکی جدید از مرورگر بگیر و دوباره بفرست."])
-        elif result["working"] and result.get("has_google"):
-            lines.extend(["", "✅ کوکی‌ها سالم و فعال هستند و شامل هر دو دامنه YouTube و Google هستند."])
-        elif result["working"]:
-            lines.extend(["", "✅ کوکی‌ها فعال هستند ولی ممکن است برای ویدیوهای دارای محدودیت سنی کافی نباشند."])
+        elif result.get("age_restricted_ok"):
+            lines.extend(["", "🎉 کوکی‌ها کامل هستند — هم ویدیوهای معمولی و هم age-restricted کار می‌کنند!"])
+        elif result["working"] and not result.get("age_restricted_ok"):
+            lines.extend(["", "⚠️ کوکی‌ها برای ویدیوهای معمولی کار می‌کنند ولی برای ویدیوهای دارای محدودیت سنی کافی نیستند.",
+                          "💡 راه‌حل: تأیید سن حساب Google را از myaccount.google.com/personal-info فعال کن، سپس کوکی جدید بگیر."])
     else:
         lines = ["<b>🍪 YouTube Cookie Check</b>", ""]
         lines.append(f"📁 <b>File:</b> {'✅ Found' if result['exists'] else '❌ Not found'}")
@@ -3152,7 +3161,15 @@ async def check_cookie_handler(client: Client, message: Message):
             if domain_list:
                 lines.append(f"📋 <b>Domains:</b> <code>{', '.join(domain_list[:10])}</code>")
             lines.append(f"✅ <b>Valid format:</b> {'Yes' if result['valid_format'] else '❌ No'}")
-            lines.append(f"🔑 <b>Working:</b> {'✅ Active' if result['working'] else '❌ Inactive'}")
+            lines.append(f"🔑 <b>Working (normal video):</b> {'✅ Active' if result['working'] else '❌ Inactive'}")
+            age_ok = result.get("age_restricted_ok")
+            if age_ok is True:
+                lines.append("🔞 <b>Age-restricted video:</b> ✅ Cookies work")
+            elif age_ok is False:
+                age_err = result.get("age_restricted_error", "")
+                lines.append("🔞 <b>Age-restricted video:</b> ❌ Cookies insufficient")
+                if age_err:
+                    lines.append(f"   Error: <code>{escape(age_err[:100])}</code>")
             if not result.get("has_google"):
                 lines.extend(["", "⚠️ <b>Warning:</b> google.com cookies are missing!"])
                 lines.append("Age-restricted videos need cookies from BOTH google.com and youtube.com.")
@@ -3163,10 +3180,11 @@ async def check_cookie_handler(client: Client, message: Message):
             lines.extend(["", "💡 Send a cookies.txt file and reply to it with /youtube_cookies."])
         elif not result["working"] and not result.get("error"):
             lines.extend(["", "💡 Cookies are expired. Export fresh cookies from your browser."])
-        elif result["working"] and result.get("has_google"):
-            lines.extend(["", "✅ Cookies are valid and include both YouTube and Google domains."])
+        elif result.get("age_restricted_ok"):
+            lines.extend(["", "🎉 Cookies fully work — both normal and age-restricted videos!"])
         elif result["working"]:
-            lines.extend(["", "✅ Cookies work but may not be sufficient for age-restricted videos."])
+            lines.extend(["", "⚠️ Cookies work for normal videos but NOT age-restricted ones.",
+                          "💡 Fix: Enable age verification at myaccount.google.com/personal-info, then re-export cookies."])
 
     await status.edit_text(
         "\n".join(lines),
@@ -3774,7 +3792,7 @@ async def process_youtube_url(message: Message, url: str, chosen_format: str | N
                 cookies_path=YOUTUBE_COOKIES_FILE if youtube_cookies_exist() else None,
             )
         except Exception as error:
-            note = compact_youtube_error(error, language)
+            note = compact_youtube_error(error, language, has_cookies=youtube_cookies_exist())
             error_title = "❌ خطا در بررسی ویدیو" if language == "fa" else "❌ Failed to fetch video"
             await picker_msg.edit_text(
                 f"<b>{error_title}</b>\n\n{escape(note)}",
@@ -3928,7 +3946,7 @@ async def process_youtube_url(message: Message, url: str, chosen_format: str | N
             )
             return {"task_id": task_id, "file_name": task_meta["file_name"], "status": "cancelled"}
 
-        note = compact_youtube_error(error, language)
+        note = compact_youtube_error(error, language, has_cookies=youtube_cookies_exist())
         await safe_edit_status(
             status,
             build_status_text(

@@ -320,11 +320,12 @@ def validate_youtube_cookies(cookies_path: Path) -> dict:
         options = {
             "quiet": True,
             "no_warnings": True,
-            "socket_timeout": 15,
+            "socket_timeout": 20,
             "noplaylist": True,
+            "age_limit": 100,
             "cookiefile": str(cookies_path),
         }
-        # Just try extracting info for a common video
+        # Test 1: normal public video
         with yt_dlp.YoutubeDL(options) as ydl:
             info = ydl.extract_info("https://www.youtube.com/watch?v=jNQXAC9IVRw", download=False)
             if isinstance(info, dict) and info.get("title"):
@@ -332,12 +333,36 @@ def validate_youtube_cookies(cookies_path: Path) -> dict:
             else:
                 result["error"] = "yt-dlp returned no data with these cookies."
     except Exception as e:
-        error_text = str(e).lower()
-        if "sign in" in error_text or "login" in error_text or "cookies" in error_text:
-            result["error"] = "Cookies are expired or invalid. Export fresh cookies."
+        full_err = str(e)
+        print(f"[check_cookie] normal video test failed: {full_err}", flush=True)
+        error_text = full_err.lower()
+        if "sign in" in error_text or "login" in error_text or "cookies" in error_text or "confirm your age" in error_text:
+            result["error"] = f"Cookies expired or rejected by YouTube: {full_err[:120]}"
         else:
-            result["working"] = True  # Video-specific error, cookies themselves may be fine
+            result["working"] = True
             result["error"] = None
+
+    # Test 2: age-restricted video (if basic test passed)
+    if result["working"]:
+        try:
+            import yt_dlp
+            options_age = {
+                "quiet": True,
+                "no_warnings": True,
+                "socket_timeout": 20,
+                "noplaylist": True,
+                "age_limit": 100,
+                "cookiefile": str(cookies_path),
+            }
+            with yt_dlp.YoutubeDL(options_age) as ydl:
+                info2 = ydl.extract_info("https://www.youtube.com/watch?v=R3fhkBRXFzo", download=False)
+                result["age_restricted_ok"] = isinstance(info2, dict) and bool(info2.get("title"))
+        except Exception as e2:
+            print(f"[check_cookie] age-restricted test failed: {e2}", flush=True)
+            result["age_restricted_ok"] = False
+            result["age_restricted_error"] = str(e2)[:150]
+    else:
+        result["age_restricted_ok"] = False
 
     return result
 
