@@ -131,6 +131,7 @@ def fetch_youtube_formats(
         "socket_timeout": 30,
         "noplaylist": True,
         "age_limit": 100,
+        "format": "best",  # Explicit fallback format to prevent 'not available' during metadata fetch
     }
     has_cookies = bool(cookies_path and cookies_path.exists())
     if has_cookies:
@@ -138,33 +139,25 @@ def fetch_youtube_formats(
 
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
-            info = ydl.extract_info(url, download=False)
+            try:
+                info = ydl.extract_info(url, download=False)
+            except Exception as e:
+                if "format" in str(e).lower() and "not available" in str(e).lower():
+                    # Retry with explicitly no format constraint to just get metadata
+                    print("YouTube fetch_formats: retrying without format filter", flush=True)
+                    options["format"] = None
+                    with yt_dlp.YoutubeDL(options) as ydl2:
+                        info = ydl2.extract_info(url, download=False)
+                else:
+                    raise
     except Exception as error:
         full_error = f"{type(error).__name__}: {error}"
         print(f"YouTube fetch_formats failed: {full_error}", flush=True)
         if has_cookies:
             print(f"YouTube cookies were provided from: {cookies_path}", flush=True)
-
-        # "format not available" during metadata means yt-dlp couldn't resolve a
-        # default format — retry with explicit listformats mode (no format filter)
-        if "format" in str(error).lower() and "not available" in str(error).lower():
-            try:
-                print("YouTube fetch_formats: retrying without format filter", flush=True)
-                retry_options = dict(options)
-                retry_options["format"] = None  # let yt-dlp pick anything
-                with yt_dlp.YoutubeDL(retry_options) as ydl2:
-                    info = ydl2.extract_info(url, download=False)
-                if not isinstance(info, dict):
-                    raise YouTubeDownloadError("Could not read YouTube metadata.")
-            except Exception as retry_error:
-                print(f"YouTube fetch_formats retry failed: {retry_error}", flush=True)
-                raise YouTubeDownloadError(
-                    compact_youtube_error(error, has_cookies=has_cookies)
-                ) from error
-        else:
-            raise YouTubeDownloadError(
-                compact_youtube_error(error, has_cookies=has_cookies)
-            ) from error
+        raise YouTubeDownloadError(
+            compact_youtube_error(error, has_cookies=has_cookies)
+        ) from error
 
     if not isinstance(info, dict):
         raise YouTubeDownloadError("Could not read YouTube metadata.")
