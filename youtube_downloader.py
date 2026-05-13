@@ -131,7 +131,6 @@ def fetch_youtube_formats(
         "socket_timeout": 30,
         "noplaylist": True,
         "age_limit": 100,
-        "extractor_args": {"youtube": {"player_client": ["web"]}},
     }
     has_cookies = bool(cookies_path and cookies_path.exists())
     if has_cookies:
@@ -522,7 +521,6 @@ def download_youtube(
         "socket_timeout": 30,
         "continuedl": True,
         "age_limit": 100,
-        "extractor_args": {"youtube": {"player_client": ["web"]}},
         "concurrent_fragment_downloads": youtube_concurrent_fragments(),
         "progress_hooks": [progress_hook],
     }
