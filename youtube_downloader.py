@@ -73,6 +73,252 @@ def format_selector(max_height: int | None = None) -> str:
     return f"best[height<={height}][ext=mp4]/best[height<={height}]/best"
 
 
+@dataclass
+class YouTubeFormatInfo:
+    format_id: str
+    label: str
+    ext: str
+    filesize: int
+    type: str  # "video", "audio"
+
+
+@dataclass
+class YouTubeVideoInfo:
+    title: str
+    duration: int
+    thumbnail: str
+    formats: list[YouTubeFormatInfo]
+    url: str
+
+
+def _human_size(size_bytes: int) -> str:
+    if size_bytes <= 0:
+        return "?"
+    value = float(size_bytes)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            return f"{value:.1f} {unit}" if unit != "B" else f"{int(value)} B"
+        value /= 1024
+    return f"{size_bytes} B"
+
+
+def _human_duration(seconds: int) -> str:
+    if seconds <= 0:
+        return "?"
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+def fetch_youtube_formats(
+    url: str,
+    cookies_path: Path | None = None,
+) -> YouTubeVideoInfo:
+    """Quickly fetch available formats for a YouTube video without downloading."""
+    if not is_youtube_url(url):
+        raise YouTubeDownloadError("Unsupported YouTube URL.")
+
+    try:
+        import yt_dlp
+    except Exception as error:
+        raise YouTubeDownloadError(f"yt-dlp is not installed: {error}") from error
+
+    options = {
+        "quiet": True,
+        "no_warnings": True,
+        "socket_timeout": 15,
+        "noplaylist": True,
+    }
+    if cookies_path and cookies_path.exists():
+        options["cookiefile"] = str(cookies_path)
+
+    try:
+        with yt_dlp.YoutubeDL(options) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception as error:
+        raise YouTubeDownloadError(compact_youtube_error(error)) from error
+
+    if not isinstance(info, dict):
+        raise YouTubeDownloadError("Could not read YouTube metadata.")
+
+    title = str(info.get("title") or "YouTube Video").strip()
+    duration = int(info.get("duration") or 0)
+    thumbnail = str(info.get("thumbnail") or "")
+
+    seen_labels: set[str] = set()
+    formats: list[YouTubeFormatInfo] = []
+    has_ffmpeg = ffmpeg_available()
+
+    raw_formats = info.get("formats") or []
+
+    # Collect video formats
+    video_heights: dict[int, dict] = {}
+    for fmt in raw_formats:
+        if not isinstance(fmt, dict):
+            continue
+        height = int(fmt.get("height") or 0)
+        vcodec = str(fmt.get("vcodec") or "none")
+        if height <= 0 or vcodec == "none":
+            continue
+        ext = str(fmt.get("ext") or "mp4")
+        filesize = int(fmt.get("filesize") or fmt.get("filesize_approx") or 0)
+        if height not in video_heights or filesize > video_heights[height].get("filesize", 0):
+            video_heights[height] = {
+                "format_id": str(fmt.get("format_id") or ""),
+                "height": height,
+                "ext": ext,
+                "filesize": filesize,
+                "fps": int(fmt.get("fps") or 0),
+            }
+
+    for height in sorted(video_heights.keys(), reverse=True):
+        v = video_heights[height]
+        fps_text = f" {v['fps']}fps" if v["fps"] and v["fps"] > 30 else ""
+        size_text = f" ~{_human_size(v['filesize'])}" if v["filesize"] > 0 else ""
+        label = f"🎬 {height}p{fps_text}{size_text}"
+        if label not in seen_labels:
+            seen_labels.add(label)
+            # For video, we use our format_selector with max_height to get best combo
+            if has_ffmpeg:
+                fmt_str = (
+                    f"bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/"
+                    f"bestvideo[height<={height}]+bestaudio/"
+                    f"best[height<={height}][ext=mp4]/best[height<={height}]/best"
+                )
+            else:
+                fmt_str = f"best[height<={height}][ext=mp4]/best[height<={height}]/best"
+            formats.append(YouTubeFormatInfo(
+                format_id=fmt_str,
+                label=label,
+                ext="mp4",
+                filesize=v["filesize"],
+                type="video",
+            ))
+
+    # Collect best audio format
+    best_audio: dict | None = None
+    for fmt in raw_formats:
+        if not isinstance(fmt, dict):
+            continue
+        vcodec = str(fmt.get("vcodec") or "none")
+        acodec = str(fmt.get("acodec") or "none")
+        if vcodec != "none" or acodec == "none":
+            continue
+        filesize = int(fmt.get("filesize") or fmt.get("filesize_approx") or 0)
+        abr = float(fmt.get("abr") or 0)
+        if best_audio is None or abr > float(best_audio.get("abr") or 0):
+            best_audio = {
+                "format_id": str(fmt.get("format_id") or ""),
+                "ext": str(fmt.get("ext") or "m4a"),
+                "filesize": filesize,
+                "abr": abr,
+            }
+
+    if best_audio:
+        size_text = f" ~{_human_size(best_audio['filesize'])}" if best_audio["filesize"] > 0 else ""
+        abr_text = f" {int(best_audio['abr'])}kbps" if best_audio["abr"] > 0 else ""
+        label = f"🎵 Audio only{abr_text}{size_text}"
+        formats.append(YouTubeFormatInfo(
+            format_id=f"bestaudio[ext=m4a]/bestaudio/best",
+            label=label,
+            ext=best_audio["ext"],
+            filesize=best_audio["filesize"],
+            type="audio",
+        ))
+
+    # If no formats found, add a default
+    if not formats:
+        formats.append(YouTubeFormatInfo(
+            format_id=format_selector(),
+            label=f"🎬 Best available",
+            ext="mp4",
+            filesize=0,
+            type="video",
+        ))
+
+    return YouTubeVideoInfo(
+        title=title,
+        duration=duration,
+        thumbnail=thumbnail,
+        formats=formats,
+        url=url,
+    )
+
+
+def validate_youtube_cookies(cookies_path: Path) -> dict:
+    """Validate YouTube cookies by trying to access a restricted test."""
+    result: dict = {
+        "exists": False,
+        "valid_format": False,
+        "lines": 0,
+        "domains": 0,
+        "youtube_domains": 0,
+        "working": False,
+        "error": None,
+    }
+
+    if not cookies_path.exists():
+        result["error"] = "Cookie file does not exist."
+        return result
+
+    result["exists"] = True
+    try:
+        text = cookies_path.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        result["error"] = f"Cannot read cookie file: {e}"
+        return result
+
+    lines = [l.strip() for l in text.splitlines() if l.strip() and not l.strip().startswith("#")]
+    result["lines"] = len(lines)
+
+    domains: set[str] = set()
+    youtube_domains: set[str] = set()
+    for line in lines:
+        parts = line.split("\t")
+        if len(parts) >= 7:
+            domain = parts[0].strip().lstrip(".")
+            domains.add(domain)
+            if "youtube" in domain.lower() or "google" in domain.lower():
+                youtube_domains.add(domain)
+
+    result["domains"] = len(domains)
+    result["youtube_domains"] = len(youtube_domains)
+    result["valid_format"] = len(lines) > 0 and len(youtube_domains) > 0
+
+    if not result["valid_format"]:
+        result["error"] = "Cookie file has no YouTube/Google cookie entries."
+        return result
+
+    # Try to use cookies with yt-dlp to extract info on a known video
+    try:
+        import yt_dlp
+        options = {
+            "quiet": True,
+            "no_warnings": True,
+            "socket_timeout": 15,
+            "noplaylist": True,
+            "cookiefile": str(cookies_path),
+        }
+        # Just try extracting info for a common video
+        with yt_dlp.YoutubeDL(options) as ydl:
+            info = ydl.extract_info("https://www.youtube.com/watch?v=jNQXAC9IVRw", download=False)
+            if isinstance(info, dict) and info.get("title"):
+                result["working"] = True
+            else:
+                result["error"] = "yt-dlp returned no data with these cookies."
+    except Exception as e:
+        error_text = str(e).lower()
+        if "sign in" in error_text or "login" in error_text or "cookies" in error_text:
+            result["error"] = "Cookies are expired or invalid. Export fresh cookies."
+        else:
+            result["working"] = True  # Video-specific error, cookies themselves may be fine
+            result["error"] = None
+
+    return result
+
+
 def compact_youtube_error(error: Exception | str, language: str = "fa") -> str:
     text = str(error)
     lower = text.lower()
@@ -179,6 +425,7 @@ def download_youtube(
     check_size,
     language: str = "fa",
     cookies_path: Path | None = None,
+    chosen_format: str | None = None,
 ) -> YouTubeDownloadResult:
     if not is_youtube_url(url):
         raise YouTubeDownloadError("Unsupported YouTube URL.")
@@ -210,8 +457,12 @@ def download_youtube(
                 check_size(total)
                 progress(total, total)
 
+    selected_format = chosen_format or format_selector()
+    is_audio = selected_format.startswith("bestaudio")
+    merge_format = "mp4" if not is_audio else None
+
     options = {
-        "format": format_selector(),
+        "format": selected_format,
         "outtmpl": outtmpl,
         "noplaylist": True,
         "quiet": True,
@@ -221,24 +472,27 @@ def download_youtube(
         "socket_timeout": 30,
         "continuedl": True,
         "concurrent_fragment_downloads": youtube_concurrent_fragments(),
-        "merge_output_format": "mp4",
         "progress_hooks": [progress_hook],
     }
+    if merge_format:
+        options["merge_output_format"] = merge_format
     if cookies_path and cookies_path.exists():
         options["cookiefile"] = str(cookies_path)
 
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
-            info = ydl.extract_info(url, download=False)
-            if should_cancel():
-                raise YouTubeDownloadCancelled("Cancelled by user.")
-            if not isinstance(info, dict):
-                raise YouTubeDownloadError("Could not read YouTube metadata.")
+            # If format was already chosen via picker, skip metadata-only pass
+            if not chosen_format:
+                info = ydl.extract_info(url, download=False)
+                if should_cancel():
+                    raise YouTubeDownloadCancelled("Cancelled by user.")
+                if not isinstance(info, dict):
+                    raise YouTubeDownloadError("Could not read YouTube metadata.")
 
-            estimated_size = _best_size(info)
-            if estimated_size > 0:
-                check_size(estimated_size)
-                progress(0, estimated_size)
+                estimated_size = _best_size(info)
+                if estimated_size > 0:
+                    check_size(estimated_size)
+                    progress(0, estimated_size)
 
             info = ydl.extract_info(url, download=True)
     except YouTubeDownloadCancelled:
@@ -250,7 +504,8 @@ def download_youtube(
 
     path = _downloaded_file(output_dir, task_id)
     title = str((info or {}).get("title") or "youtube").strip() or "youtube"
-    final_name = safe_filename(f"{title}_{task_id}{path.suffix or '.mp4'}", f"youtube_{task_id}.mp4")
+    default_ext = ".m4a" if is_audio else (path.suffix or ".mp4")
+    final_name = safe_filename(f"{title}_{task_id}{default_ext}", f"youtube_{task_id}{default_ext}")
     final_path = _unique_path(output_dir, final_name)
     if final_path != path:
         path.replace(final_path)

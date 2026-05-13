@@ -67,10 +67,15 @@ from task_store import (
 )
 from youtube_downloader import (
     YouTubeDownloadCancelled,
+    YouTubeFormatInfo,
+    YouTubeVideoInfo,
+    _human_duration as yt_human_duration,
     cleanup_youtube_partials,
     compact_youtube_error,
     download_youtube,
+    fetch_youtube_formats,
     is_youtube_url,
+    validate_youtube_cookies,
 )
 
 
@@ -182,6 +187,7 @@ RECENT_CALLBACKS: dict[str, float] = {}
 BASE_DIR = Path(__file__).resolve().parent
 RUBIKA_AUTH_HELPER = BASE_DIR / "rubika_auth_helper.py"
 YOUTUBE_COOKIES_FILE = DATA_DIR / "youtube_cookies.txt"
+YOUTUBE_FORMAT_CHOICES: dict[str, dict] = {}  # token -> {url, format_id, label, chat_id, ...}
 
 BTN_STATUS = "📊 Status"
 BTN_TRANSFERS = "📋 Transfers"
@@ -294,6 +300,7 @@ BOT_COMMAND_LABELS = {
         "set_rubika": "Start Rubika number setup",
         "youtube_cookies": "Save YouTube cookies.txt",
         "clear_youtube_cookies": "Remove YouTube cookies",
+        "check_cookie": "Check if YouTube cookies are valid",
         "speedtest": "Test current Space network",
         "retry": "Retry a failed transfer",
         "retry_all": "Retry all failed transfers",
@@ -308,6 +315,7 @@ BOT_COMMAND_LABELS = {
         "set_rubika": "شروع تنظیم شماره روبیکا",
         "youtube_cookies": "ذخیره کوکی یوتیوب",
         "clear_youtube_cookies": "حذف کوکی یوتیوب",
+        "check_cookie": "بررسی اعتبار کوکی یوتیوب",
         "speedtest": "تست سرعت شبکه",
         "retry": "تلاش دوباره برای انتقال ناموفق",
         "retry_all": "تلاش دوباره برای همه انتقال‌های ناموفق",
@@ -410,7 +418,7 @@ def build_menu_text() -> str:
         destination_label = "Destination"
     return "\n".join(
         [
-            "<b>⛵️ WalrusHF v1.2.1</b>",
+            "<b>⛵️ WalrusHF v1.2.2</b>",
             intro,
             "",
             f"📱 <b>{session_label}:</b> {ltr_code(settings['rubika_session'])}",
@@ -3023,6 +3031,94 @@ async def clear_youtube_cookies_handler(client: Client, message: Message):
     await message.reply_text(text, reply_markup=menu_keyboard())
 
 
+@app.on_message(filters.private & filters.command("check_cookie"))
+async def check_cookie_handler(client: Client, message: Message):
+    if not await ensure_authorized_message(message):
+        return
+    await ensure_bot_commands(client)
+
+    lang = current_language()
+    checking = "⏳ در حال بررسی کوکی یوتیوب..." if lang == "fa" else "⏳ Checking YouTube cookies..."
+    status = await message.reply_text(checking)
+
+    try:
+        result = await asyncio.to_thread(validate_youtube_cookies, YOUTUBE_COOKIES_FILE)
+    except Exception as error:
+        await status.edit_text(f"⚠️ Error: {error}", reply_markup=menu_keyboard())
+        return
+
+    if lang == "fa":
+        lines = ["<b>🍪 بررسی کوکی یوتیوب</b>", ""]
+        lines.append(f"📁 <b>فایل:</b> {'✅ موجود' if result['exists'] else '❌ وجود ندارد'}")
+        if result["exists"]:
+            lines.append(f"📝 <b>تعداد خطوط:</b> <code>{result['lines']}</code>")
+            lines.append(f"🌐 <b>دامنه‌ها:</b> <code>{result['domains']}</code>")
+            lines.append(f"▶️ <b>دامنه‌های یوتیوب/گوگل:</b> <code>{result['youtube_domains']}</code>")
+            lines.append(f"📋 <b>فرمت معتبر:</b> {'✅ بله' if result['valid_format'] else '❌ خیر'}")
+            lines.append(f"🔑 <b>عملکرد:</b> {'✅ فعال' if result['working'] else '❌ غیرفعال'}")
+        if result.get("error"):
+            lines.extend(["", f"⚠️ <b>خطا:</b> {escape(str(result['error']))}"])
+        if not result["exists"]:
+            lines.extend(["", "💡 فایل cookies.txt را بفرست و روی آن /youtube_cookies بزن."])
+        elif not result["working"]:
+            lines.extend(["", "💡 کوکی‌ها منقضی شده‌اند. کوکی جدید از مرورگر بگیر و دوباره بفرست."])
+        else:
+            lines.extend(["", "✅ کوکی‌ها سالم و فعال هستند."])
+    else:
+        lines = ["<b>🍪 YouTube Cookie Check</b>", ""]
+        lines.append(f"📁 <b>File:</b> {'✅ Found' if result['exists'] else '❌ Not found'}")
+        if result["exists"]:
+            lines.append(f"📝 <b>Lines:</b> <code>{result['lines']}</code>")
+            lines.append(f"🌐 <b>Domains:</b> <code>{result['domains']}</code>")
+            lines.append(f"▶️ <b>YouTube/Google domains:</b> <code>{result['youtube_domains']}</code>")
+            lines.append(f"📋 <b>Valid format:</b> {'✅ Yes' if result['valid_format'] else '❌ No'}")
+            lines.append(f"🔑 <b>Working:</b> {'✅ Active' if result['working'] else '❌ Inactive'}")
+        if result.get("error"):
+            lines.extend(["", f"⚠️ <b>Error:</b> {escape(str(result['error']))}"])
+        if not result["exists"]:
+            lines.extend(["", "💡 Send a cookies.txt file and reply to it with /youtube_cookies."])
+        elif not result["working"]:
+            lines.extend(["", "💡 Cookies are expired. Export fresh cookies from your browser."])
+        else:
+            lines.extend(["", "✅ Cookies are valid and working."])
+
+    await status.edit_text(
+        "\n".join(lines),
+        parse_mode=enums.ParseMode.HTML,
+        reply_markup=menu_keyboard(),
+    )
+
+
+@app.on_callback_query(filters.regex(r"^ytfmt:"))
+async def youtube_format_callback_handler(client: Client, callback_query: CallbackQuery):
+    if not await ensure_authorized_callback(callback_query):
+        return
+    if callback_seen(callback_query):
+        await callback_query.answer()
+        return
+
+    token = (callback_query.data or "").split(":", 1)[-1]
+    choice = YOUTUBE_FORMAT_CHOICES.pop(token, None)
+    if not choice:
+        await callback_query.answer("⚠️ Selection expired. Send the link again.")
+        return
+
+    await callback_query.answer("✅ Starting download...")
+    url = choice["url"]
+    format_id = choice["format_id"]
+    label = choice.get("label", "")
+
+    # Remove the format picker message
+    try:
+        await callback_query.message.delete()
+    except Exception:
+        pass
+
+    # Create a synthetic message-like object from the original chat
+    message = callback_query.message
+    await process_youtube_url(message, url, chosen_format=format_id)
+
+
 @app.on_message(filters.private & filters.command("speedtest"))
 async def speedtest_handler(client: Client, message: Message):
     if not await ensure_authorized_message(message):
@@ -3572,11 +3668,70 @@ async def process_direct_file_url(message: Message, url: str) -> dict:
         ACTIVE_DOWNLOADS.pop(task_id, None)
 
 
-async def process_youtube_url(message: Message, url: str) -> dict:
+async def process_youtube_url(message: Message, url: str, chosen_format: str | None = None) -> dict:
     task_id = uuid.uuid4().hex[:10]
     started_at = time.time()
     runtime_settings = load_runtime_settings()
     language = runtime_settings["language"]
+
+    # ── Quality picker: if no format chosen yet, show available qualities ──
+    if not chosen_format:
+        fetching = (
+            "⏳ در حال بررسی ویدیو..." if language == "fa"
+            else "⏳ Fetching video info..."
+        )
+        picker_msg = await message.reply_text(fetching)
+        try:
+            video_info = await asyncio.to_thread(
+                fetch_youtube_formats,
+                url,
+                cookies_path=YOUTUBE_COOKIES_FILE if youtube_cookies_exist() else None,
+            )
+        except Exception as error:
+            note = compact_youtube_error(error, language)
+            error_title = "❌ خطا در بررسی ویدیو" if language == "fa" else "❌ Failed to fetch video"
+            await picker_msg.edit_text(
+                f"<b>{error_title}</b>\n\n{escape(note)}",
+                parse_mode=enums.ParseMode.HTML,
+                reply_markup=menu_keyboard(),
+            )
+            return {"task_id": task_id, "file_name": f"youtube_{task_id}.mp4", "status": "failed"}
+
+        # Build quality picker keyboard
+        duration_text = yt_human_duration(video_info.duration)
+        title_text = escape(video_info.title[:80])
+        if language == "fa":
+            header = (
+                f"<b>▶️ {title_text}</b>\n"
+                f"⏱ مدت: <code>{duration_text}</code>\n\n"
+                f"📥 کیفیت مورد نظر را انتخاب کن:"
+            )
+        else:
+            header = (
+                f"<b>▶️ {title_text}</b>\n"
+                f"⏱ Duration: <code>{duration_text}</code>\n\n"
+                f"📥 Choose quality:"
+            )
+
+        rows = []
+        for fmt in video_info.formats[:8]:
+            token = uuid.uuid4().hex[:10]
+            YOUTUBE_FORMAT_CHOICES[token] = {
+                "url": url,
+                "format_id": fmt.format_id,
+                "label": fmt.label,
+                "chat_id": message.chat.id,
+            }
+            rows.append([InlineKeyboardButton(fmt.label, callback_data=f"ytfmt:{token}")])
+
+        await picker_msg.edit_text(
+            header,
+            parse_mode=enums.ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(rows),
+        )
+        return {"task_id": task_id, "file_name": f"youtube_{task_id}.mp4", "status": "picking_quality"}
+
+    # ── Download with chosen format ──
     file_name = f"youtube_{task_id}.mp4"
     task_meta = {
         "file_name": file_name,
@@ -3637,6 +3792,7 @@ async def process_youtube_url(message: Message, url: str) -> dict:
             check_size=check_youtube_size,
             language=language,
             cookies_path=YOUTUBE_COOKIES_FILE if youtube_cookies_exist() else None,
+            chosen_format=chosen_format,
         )
 
         if ACTIVE_DOWNLOADS.get(task_id, {}).get("cancelled"):
@@ -3648,13 +3804,14 @@ async def process_youtube_url(message: Message, url: str) -> dict:
         ACTIVE_DOWNLOADS[task_id]["file_name"] = result.file_name
         ACTIVE_DOWNLOADS[task_id]["file_size"] = result.file_size
 
+        media_type = "audio" if chosen_format and chosen_format.startswith("bestaudio") else "video"
         await queue_downloaded_file(
             task_id=task_id,
             message=message,
             status=status,
             file_name=result.file_name,
             file_size=result.file_size,
-            media_type="video",
+            media_type=media_type,
             started_at=started_at,
             downloaded_path=result.path,
             caption="",
