@@ -418,7 +418,7 @@ def build_menu_text() -> str:
         destination_label = "Destination"
     return "\n".join(
         [
-            "<b>⛵️ WalrusHF v1.2.2</b>",
+            "<b>⛵️ WalrusHF v1.2.3</b>",
             intro,
             "",
             f"📱 <b>{session_label}:</b> {ltr_code(settings['rubika_session'])}",
@@ -3052,35 +3052,55 @@ async def check_cookie_handler(client: Client, message: Message):
         lines.append(f"📁 <b>فایل:</b> {'✅ موجود' if result['exists'] else '❌ وجود ندارد'}")
         if result["exists"]:
             lines.append(f"📝 <b>تعداد خطوط:</b> <code>{result['lines']}</code>")
-            lines.append(f"🌐 <b>دامنه‌ها:</b> <code>{result['domains']}</code>")
-            lines.append(f"▶️ <b>دامنه‌های یوتیوب/گوگل:</b> <code>{result['youtube_domains']}</code>")
-            lines.append(f"📋 <b>فرمت معتبر:</b> {'✅ بله' if result['valid_format'] else '❌ خیر'}")
+            lines.append(f"🌐 <b>کل دامنه‌ها:</b> <code>{result['domains']}</code>")
+            lines.append(f"▶️ <b>دامنه‌های YouTube:</b> {'✅' if result.get('has_youtube') else '❌'} <code>{result.get('youtube_domains', 0)}</code>")
+            lines.append(f"🔍 <b>دامنه‌های Google:</b> {'✅' if result.get('has_google') else '❌'} <code>{result.get('google_domains', 0)}</code>")
+            domain_list = result.get("domain_list") or []
+            if domain_list:
+                lines.append(f"📋 <b>لیست دامنه‌ها:</b> <code>{', '.join(domain_list[:10])}</code>")
+            lines.append(f"✅ <b>فرمت معتبر:</b> {'بله' if result['valid_format'] else '❌ خیر'}")
             lines.append(f"🔑 <b>عملکرد:</b> {'✅ فعال' if result['working'] else '❌ غیرفعال'}")
+            if not result.get("has_google"):
+                lines.extend(["", "⚠️ <b>هشدار:</b> کوکی‌های google.com وجود ندارند!"])
+                lines.append("ویدیوهای دارای محدودیت سنی نیاز به کوکی هر دو دامنه google.com و youtube.com دارند.")
+                lines.append("لطفاً کوکی را با ابزاری بگیر که <b>همه دامنه‌ها</b> را اکسپورت کند.")
         if result.get("error"):
             lines.extend(["", f"⚠️ <b>خطا:</b> {escape(str(result['error']))}"])
         if not result["exists"]:
             lines.extend(["", "💡 فایل cookies.txt را بفرست و روی آن /youtube_cookies بزن."])
-        elif not result["working"]:
+        elif not result["working"] and not result.get("error"):
             lines.extend(["", "💡 کوکی‌ها منقضی شده‌اند. کوکی جدید از مرورگر بگیر و دوباره بفرست."])
-        else:
-            lines.extend(["", "✅ کوکی‌ها سالم و فعال هستند."])
+        elif result["working"] and result.get("has_google"):
+            lines.extend(["", "✅ کوکی‌ها سالم و فعال هستند و شامل هر دو دامنه YouTube و Google هستند."])
+        elif result["working"]:
+            lines.extend(["", "✅ کوکی‌ها فعال هستند ولی ممکن است برای ویدیوهای دارای محدودیت سنی کافی نباشند."])
     else:
         lines = ["<b>🍪 YouTube Cookie Check</b>", ""]
         lines.append(f"📁 <b>File:</b> {'✅ Found' if result['exists'] else '❌ Not found'}")
         if result["exists"]:
             lines.append(f"📝 <b>Lines:</b> <code>{result['lines']}</code>")
-            lines.append(f"🌐 <b>Domains:</b> <code>{result['domains']}</code>")
-            lines.append(f"▶️ <b>YouTube/Google domains:</b> <code>{result['youtube_domains']}</code>")
-            lines.append(f"📋 <b>Valid format:</b> {'✅ Yes' if result['valid_format'] else '❌ No'}")
+            lines.append(f"🌐 <b>Total domains:</b> <code>{result['domains']}</code>")
+            lines.append(f"▶️ <b>YouTube domains:</b> {'✅' if result.get('has_youtube') else '❌'} <code>{result.get('youtube_domains', 0)}</code>")
+            lines.append(f"🔍 <b>Google domains:</b> {'✅' if result.get('has_google') else '❌'} <code>{result.get('google_domains', 0)}</code>")
+            domain_list = result.get("domain_list") or []
+            if domain_list:
+                lines.append(f"📋 <b>Domains:</b> <code>{', '.join(domain_list[:10])}</code>")
+            lines.append(f"✅ <b>Valid format:</b> {'Yes' if result['valid_format'] else '❌ No'}")
             lines.append(f"🔑 <b>Working:</b> {'✅ Active' if result['working'] else '❌ Inactive'}")
+            if not result.get("has_google"):
+                lines.extend(["", "⚠️ <b>Warning:</b> google.com cookies are missing!"])
+                lines.append("Age-restricted videos need cookies from BOTH google.com and youtube.com.")
+                lines.append("Re-export cookies with a tool that exports <b>all domains</b>.")
         if result.get("error"):
             lines.extend(["", f"⚠️ <b>Error:</b> {escape(str(result['error']))}"])
         if not result["exists"]:
             lines.extend(["", "💡 Send a cookies.txt file and reply to it with /youtube_cookies."])
-        elif not result["working"]:
+        elif not result["working"] and not result.get("error"):
             lines.extend(["", "💡 Cookies are expired. Export fresh cookies from your browser."])
-        else:
-            lines.extend(["", "✅ Cookies are valid and working."])
+        elif result["working"] and result.get("has_google"):
+            lines.extend(["", "✅ Cookies are valid and include both YouTube and Google domains."])
+        elif result["working"]:
+            lines.extend(["", "✅ Cookies work but may not be sufficient for age-restricted videos."])
 
     await status.edit_text(
         "\n".join(lines),

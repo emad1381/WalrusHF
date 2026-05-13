@@ -128,17 +128,25 @@ def fetch_youtube_formats(
     options = {
         "quiet": True,
         "no_warnings": True,
-        "socket_timeout": 15,
+        "socket_timeout": 30,
         "noplaylist": True,
+        "age_limit": 100,
     }
-    if cookies_path and cookies_path.exists():
+    has_cookies = bool(cookies_path and cookies_path.exists())
+    if has_cookies:
         options["cookiefile"] = str(cookies_path)
 
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
             info = ydl.extract_info(url, download=False)
     except Exception as error:
-        raise YouTubeDownloadError(compact_youtube_error(error)) from error
+        full_error = f"{type(error).__name__}: {error}"
+        print(f"YouTube fetch_formats failed: {full_error}", flush=True)
+        if has_cookies:
+            print(f"YouTube cookies were provided from: {cookies_path}", flush=True)
+        raise YouTubeDownloadError(
+            compact_youtube_error(error, has_cookies=has_cookies)
+        ) from error
 
     if not isinstance(info, dict):
         raise YouTubeDownloadError("Could not read YouTube metadata.")
@@ -275,21 +283,35 @@ def validate_youtube_cookies(cookies_path: Path) -> dict:
 
     domains: set[str] = set()
     youtube_domains: set[str] = set()
+    google_domains: set[str] = set()
     for line in lines:
         parts = line.split("\t")
         if len(parts) >= 7:
             domain = parts[0].strip().lstrip(".")
             domains.add(domain)
-            if "youtube" in domain.lower() or "google" in domain.lower():
+            if "youtube" in domain.lower():
                 youtube_domains.add(domain)
+            if "google" in domain.lower():
+                google_domains.add(domain)
 
     result["domains"] = len(domains)
     result["youtube_domains"] = len(youtube_domains)
-    result["valid_format"] = len(lines) > 0 and len(youtube_domains) > 0
+    result["google_domains"] = len(google_domains)
+    result["domain_list"] = sorted(domains)
+    result["has_google"] = len(google_domains) > 0
+    result["has_youtube"] = len(youtube_domains) > 0
+    result["valid_format"] = len(lines) > 0 and (len(youtube_domains) > 0 or len(google_domains) > 0)
 
     if not result["valid_format"]:
         result["error"] = "Cookie file has no YouTube/Google cookie entries."
         return result
+
+    if not result["has_google"]:
+        result["error"] = (
+            "Cookie file is missing google.com cookies. "
+            "Age-restricted videos need cookies from BOTH google.com and youtube.com. "
+            "Re-export cookies with all domains included."
+        )
 
     # Try to use cookies with yt-dlp to extract info on a known video
     try:
@@ -319,7 +341,7 @@ def validate_youtube_cookies(cookies_path: Path) -> dict:
     return result
 
 
-def compact_youtube_error(error: Exception | str, language: str = "fa") -> str:
+def compact_youtube_error(error: Exception | str, language: str = "fa", has_cookies: bool = False) -> str:
     text = str(error)
     lower = text.lower()
     fa = language == "fa"
@@ -328,17 +350,29 @@ def compact_youtube_error(error: Exception | str, language: str = "fa") -> str:
         return "دانلود لغو شد." if fa else "Download cancelled."
     if "private" in lower:
         return "این ویدیو خصوصی است و قابل دانلود نیست." if fa else "This video is private."
+    if "age" in lower:
+        if has_cookies:
+            return (
+                "این ویدیو محدودیت سنی دارد. کوکی‌های فعلی کافی نیستند. "
+                "مطمئن شو کوکی‌ها شامل دامنه‌های google.com و youtube.com هستند و حساب Google‌ات تأیید سن دارد. "
+                "کوکی جدید بگیر و /youtube_cookies بزن."
+                if fa
+                else "This video is age-restricted. Current cookies are not sufficient. "
+                "Make sure cookies include both google.com and youtube.com domains, "
+                "and your Google account has age verification. Re-export and /youtube_cookies."
+            )
+        return (
+            "این ویدیو محدودیت سنی دارد. فایل cookies.txt از مرورگری که داخل Google/YouTube لاگین است بگیر "
+            "(هم دامنه google.com و هم youtube.com)، بفرست و /youtube_cookies بزن."
+            if fa
+            else "This video is age-restricted. Export cookies.txt from a browser logged into Google/YouTube "
+            "(include both google.com and youtube.com domains), send it and use /youtube_cookies."
+        )
     if "sign in" in lower or "login" in lower or "cookies" in lower:
         return (
             "یوتیوب برای این ویدیو ورود/کوکی می‌خواهد. فایل cookies.txt را بفرست و روی آن /youtube_cookies بزن، بعد لینک را دوباره ارسال کن."
             if fa
             else "YouTube requires sign-in or cookies for this video. Send cookies.txt, reply to it with /youtube_cookies, then retry the link."
-        )
-    if "age" in lower:
-        return (
-            "این ویدیو محدودیت سنی دارد و بدون ورود قابل دانلود نیست."
-            if fa
-            else "This video is age-restricted."
         )
     if "not available in your country" in lower or "region" in lower:
         return (
