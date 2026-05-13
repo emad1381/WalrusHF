@@ -43,12 +43,12 @@ from task_store import (
 
 load_dotenv()
 
-MAX_RETRIES = 5
-RETRY_DELAY = 3
+MAX_RETRIES = 8
+RETRY_DELAY = 2
 ERROR_TEXT_LIMIT = 220
-RUBIKA_CONNECT_TIMEOUT = int(os.getenv("RUBIKA_CONNECT_TIMEOUT", "25") or 25)
-RUBIKA_FINALIZE_RETRIES = int(os.getenv("RUBIKA_FINALIZE_RETRIES", "3") or 3)
-RUBIKA_FINALIZE_RETRY_DELAY = float(os.getenv("RUBIKA_FINALIZE_RETRY_DELAY", "2") or 2)
+RUBIKA_CONNECT_TIMEOUT = int(os.getenv("RUBIKA_CONNECT_TIMEOUT", "60") or 60)
+RUBIKA_FINALIZE_RETRIES = int(os.getenv("RUBIKA_FINALIZE_RETRIES", "5") or 5)
+RUBIKA_FINALIZE_RETRY_DELAY = float(os.getenv("RUBIKA_FINALIZE_RETRY_DELAY", "1.5") or 1.5)
 
 ensure_storage_dirs()
 
@@ -270,7 +270,6 @@ async def send_document(
     try:
         uploaded = await client.upload(
             file_path,
-            chunk=524288,
             callback=callback,
             file_name=upload_name,
         )

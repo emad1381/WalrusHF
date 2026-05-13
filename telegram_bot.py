@@ -94,7 +94,7 @@ API_ID = env_int("API_ID")
 API_HASH = os.getenv("API_HASH", "").strip()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 OWNER_TELEGRAM_ID = env_int("OWNER_TELEGRAM_ID")
-RUBIKA_CONNECT_TIMEOUT = env_int("RUBIKA_CONNECT_TIMEOUT", 25)
+RUBIKA_CONNECT_TIMEOUT = env_int("RUBIKA_CONNECT_TIMEOUT", 60)
 TELEGRAM_SESSION = str(
     runtime_path(
         os.getenv("TELEGRAM_SESSION", "walrus").strip() or "walrus",
@@ -410,7 +410,7 @@ def build_menu_text() -> str:
         destination_label = "Destination"
     return "\n".join(
         [
-            "<b>⛵️ WalrusHF v1.2.0</b>",
+            "<b>⛵️ WalrusHF v1.2.1</b>",
             intro,
             "",
             f"📱 <b>{session_label}:</b> {ltr_code(settings['rubika_session'])}",
