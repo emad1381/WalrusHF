@@ -131,6 +131,7 @@ def fetch_youtube_formats(
         "socket_timeout": 30,
         "noplaylist": True,
         "age_limit": 100,
+        "extractor_args": {"youtube": {"player_client": ["web"]}},
     }
     has_cookies = bool(cookies_path and cookies_path.exists())
     if has_cookies:
@@ -370,6 +371,20 @@ def compact_youtube_error(error: Exception | str, language: str = "fa", has_cook
             "(include both google.com and youtube.com domains), send it and use /youtube_cookies."
         )
     if "sign in" in lower or "login" in lower or "cookies" in lower:
+        if has_cookies:
+            return (
+                "کوکی‌ها موجود هستند ولی یوتیوب هنوز قبول نمی‌کنه. "
+                "احتمالاً کوکی‌ها منقضی شده‌اند یا حساب Google تأیید سن ندارد. "
+                "مراحل: 1) در مرورگر وارد Google شو 2) در تنظیمات Google تأیید سن کن "
+                "3) کوکی جدید بگیر و /youtube_cookies بزن. "
+                f"\n\nخطای اصلی: {text[:200]}"
+                if fa
+                else "Cookies exist but YouTube still requires sign-in. "
+                "Cookies may be expired or Google account lacks age verification. "
+                "Steps: 1) Sign into Google in browser 2) Verify age in Google settings "
+                "3) Re-export cookies and /youtube_cookies. "
+                f"\n\nOriginal error: {text[:200]}"
+            )
         return (
             "یوتیوب برای این ویدیو ورود/کوکی می‌خواهد. فایل cookies.txt را بفرست و روی آن /youtube_cookies بزن، بعد لینک را دوباره ارسال کن."
             if fa
@@ -507,6 +522,7 @@ def download_youtube(
         "socket_timeout": 30,
         "continuedl": True,
         "age_limit": 100,
+        "extractor_args": {"youtube": {"player_client": ["web"]}},
         "concurrent_fragment_downloads": youtube_concurrent_fragments(),
         "progress_hooks": [progress_hook],
     }
