@@ -418,7 +418,7 @@ def build_menu_text() -> str:
         destination_label = "Destination"
     return "\n".join(
         [
-            "<b>⛵️ WalrusHF v1.2.7</b>",
+            "<b>⛵️ WalrusHF v1.2.8</b>",
             intro,
             "",
             f"📱 <b>{session_label}:</b> {ltr_code(settings['rubika_session'])}",
@@ -3131,9 +3131,11 @@ async def check_cookie_handler(client: Client, message: Message):
                 lines.append("🔞 <b>ویدیوی محدودیت سنی:</b> ✅ کوکی‌ها کار می‌کنند")
             elif age_ok is False:
                 age_err = result.get("age_restricted_error", "")
-                lines.append(f"🔞 <b>ویدیوی محدودیت سنی:</b> ❌ کوکی‌ها کافی نیستند")
+                lines.append("🔞 <b>ویدیوی محدودیت سنی:</b> ❌ کوکی‌ها کافی نیستند")
                 if age_err:
                     lines.append(f"   خطا: <code>{escape(age_err[:100])}</code>")
+            elif age_ok is None and result.get("age_restricted_error"):
+                lines.append(f"🔞 <b>ویدیوی محدودیت سنی:</b> ❓ قابل تشخیص نیست (سرور ریجن)")
             if not result.get("has_google"):
                 lines.extend(["", "⚠️ <b>هشدار:</b> کوکی‌های google.com وجود ندارند!"])
                 lines.append("ویدیوهای دارای محدودیت سنی نیاز به کوکی هر دو دامنه google.com و youtube.com دارند.")
@@ -3144,11 +3146,13 @@ async def check_cookie_handler(client: Client, message: Message):
             lines.extend(["", "💡 فایل cookies.txt را بفرست و روی آن /youtube_cookies بزن."])
         elif not result["working"] and not result.get("error"):
             lines.extend(["", "💡 کوکی‌ها منقضی شده‌اند. کوکی جدید از مرورگر بگیر و دوباره بفرست."])
-        elif result.get("age_restricted_ok"):
+        elif result.get("age_restricted_ok") is True:
             lines.extend(["", "🎉 کوکی‌ها کامل هستند — هم ویدیوهای معمولی و هم age-restricted کار می‌کنند!"])
-        elif result["working"] and not result.get("age_restricted_ok"):
+        elif result["working"] and result.get("age_restricted_ok") is False:
             lines.extend(["", "⚠️ کوکی‌ها برای ویدیوهای معمولی کار می‌کنند ولی برای ویدیوهای دارای محدودیت سنی کافی نیستند.",
                           "💡 راه‌حل: تأیید سن حساب Google را از myaccount.google.com/personal-info فعال کن، سپس کوکی جدید بگیر."])
+        elif result["working"]:
+            lines.extend(["", "✅ کوکی‌ها سالم و فعال هستند."])
     else:
         lines = ["<b>🍪 YouTube Cookie Check</b>", ""]
         lines.append(f"📁 <b>File:</b> {'✅ Found' if result['exists'] else '❌ Not found'}")
@@ -3170,6 +3174,8 @@ async def check_cookie_handler(client: Client, message: Message):
                 lines.append("🔞 <b>Age-restricted video:</b> ❌ Cookies insufficient")
                 if age_err:
                     lines.append(f"   Error: <code>{escape(age_err[:100])}</code>")
+            elif age_ok is None and result.get("age_restricted_error"):
+                lines.append("🔞 <b>Age-restricted video:</b> ❓ Inconclusive (server region)")
             if not result.get("has_google"):
                 lines.extend(["", "⚠️ <b>Warning:</b> google.com cookies are missing!"])
                 lines.append("Age-restricted videos need cookies from BOTH google.com and youtube.com.")
@@ -3180,11 +3186,13 @@ async def check_cookie_handler(client: Client, message: Message):
             lines.extend(["", "💡 Send a cookies.txt file and reply to it with /youtube_cookies."])
         elif not result["working"] and not result.get("error"):
             lines.extend(["", "💡 Cookies are expired. Export fresh cookies from your browser."])
-        elif result.get("age_restricted_ok"):
+        elif result.get("age_restricted_ok") is True:
             lines.extend(["", "🎉 Cookies fully work — both normal and age-restricted videos!"])
-        elif result["working"]:
+        elif result["working"] and result.get("age_restricted_ok") is False:
             lines.extend(["", "⚠️ Cookies work for normal videos but NOT age-restricted ones.",
                           "💡 Fix: Enable age verification at myaccount.google.com/personal-info, then re-export cookies."])
+        elif result["working"]:
+            lines.extend(["", "✅ Cookies are valid and working."])
 
     await status.edit_text(
         "\n".join(lines),

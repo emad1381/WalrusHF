@@ -144,9 +144,27 @@ def fetch_youtube_formats(
         print(f"YouTube fetch_formats failed: {full_error}", flush=True)
         if has_cookies:
             print(f"YouTube cookies were provided from: {cookies_path}", flush=True)
-        raise YouTubeDownloadError(
-            compact_youtube_error(error, has_cookies=has_cookies)
-        ) from error
+
+        # "format not available" during metadata means yt-dlp couldn't resolve a
+        # default format — retry with explicit listformats mode (no format filter)
+        if "format" in str(error).lower() and "not available" in str(error).lower():
+            try:
+                print("YouTube fetch_formats: retrying without format filter", flush=True)
+                retry_options = dict(options)
+                retry_options["format"] = None  # let yt-dlp pick anything
+                with yt_dlp.YoutubeDL(retry_options) as ydl2:
+                    info = ydl2.extract_info(url, download=False)
+                if not isinstance(info, dict):
+                    raise YouTubeDownloadError("Could not read YouTube metadata.")
+            except Exception as retry_error:
+                print(f"YouTube fetch_formats retry failed: {retry_error}", flush=True)
+                raise YouTubeDownloadError(
+                    compact_youtube_error(error, has_cookies=has_cookies)
+                ) from error
+        else:
+            raise YouTubeDownloadError(
+                compact_youtube_error(error, has_cookies=has_cookies)
+            ) from error
 
     if not isinstance(info, dict):
         raise YouTubeDownloadError("Could not read YouTube metadata.")
@@ -354,13 +372,47 @@ def validate_youtube_cookies(cookies_path: Path) -> dict:
                 "age_limit": 100,
                 "cookiefile": str(cookies_path),
             }
-            with yt_dlp.YoutubeDL(options_age) as ydl:
-                info2 = ydl.extract_info("https://www.youtube.com/watch?v=R3fhkBRXFzo", download=False)
-                result["age_restricted_ok"] = isinstance(info2, dict) and bool(info2.get("title"))
+            # Try a few known age-restricted test videos
+            _age_test_urls = [
+                "https://www.youtube.com/watch?v=e3lz8JjSLDA",  # known age-restricted
+                "https://www.youtube.com/watch?v=6FGV47zQ_0E",  # fallback
+            ]
+            age_ok = None
+            age_err_text = ""
+            for test_url in _age_test_urls:
+                try:
+                    with yt_dlp.YoutubeDL(options_age) as ydl:
+                        info2 = ydl.extract_info(test_url, download=False)
+                        if isinstance(info2, dict) and info2.get("title"):
+                            age_ok = True
+                            break
+                        else:
+                            age_ok = False
+                            age_err_text = "No data returned."
+                except Exception as e2:
+                    err2 = str(e2).lower()
+                    print(f"[check_cookie] age test {test_url} failed: {e2}", flush=True)
+                    if "unavailable" in err2 or "not available" in err2 or "private" in err2:
+                        # This video is blocked in region or deleted — inconclusive, skip
+                        continue
+                    elif "sign in" in err2 or "login" in err2 or "age" in err2 or "confirm" in err2:
+                        age_ok = False
+                        age_err_text = str(e2)[:150]
+                        break
+                    else:
+                        # Unknown error, treat as inconclusive
+                        continue
+            if age_ok is None:
+                # All test videos were unavailable in this region — can't determine
+                result["age_restricted_ok"] = None
+                result["age_restricted_error"] = "All test videos unavailable in server region. Cannot verify."
+            else:
+                result["age_restricted_ok"] = age_ok
+                if age_err_text:
+                    result["age_restricted_error"] = age_err_text
         except Exception as e2:
-            print(f"[check_cookie] age-restricted test failed: {e2}", flush=True)
-            result["age_restricted_ok"] = False
-            result["age_restricted_error"] = str(e2)[:150]
+            print(f"[check_cookie] age-restricted test setup failed: {e2}", flush=True)
+            result["age_restricted_ok"] = None
     else:
         result["age_restricted_ok"] = False
 
