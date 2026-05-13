@@ -171,6 +171,7 @@ app = Client(
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
     in_memory=True,
+    max_concurrent_transmissions=5,
 )
 
 ACTIVE_DOWNLOADS: dict[str, dict] = {}
