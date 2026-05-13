@@ -410,7 +410,7 @@ def build_menu_text() -> str:
         destination_label = "Destination"
     return "\n".join(
         [
-            "<b>⛵️ WalrusHF</b>",
+            "<b>⛵️ WalrusHF v1.2.0</b>",
             intro,
             "",
             f"📱 <b>{session_label}:</b> {ltr_code(settings['rubika_session'])}",

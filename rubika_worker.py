@@ -270,7 +270,7 @@ async def send_document(
     try:
         uploaded = await client.upload(
             file_path,
-            chunk=2048576,
+            chunk=524288,
             callback=callback,
             file_name=upload_name,
         )
